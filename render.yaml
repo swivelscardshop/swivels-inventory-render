@@ -22,9 +22,5 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
-      - key: MANAPOOL_API_URL
-        sync: false
-      - key: MANAPOOL_API_KEY
-        sync: false
       - key: SYNC_CRON_SECRET
         generateValue: true

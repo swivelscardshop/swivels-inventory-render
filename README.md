@@ -2,12 +2,14 @@
 
 Fresh eBay-master inventory system for Swivels Card Shop.
 
-## Current package
+## Current package — v1.2.0
 
-This package contains the working responsive application interface, the fresh
-Supabase schema, Railway deployment configuration, and environment-variable
-contract. The included interface uses representative preview records until the
-marketplace credentials and sync workers are connected.
+This package contains the real-data Render application. It contains no sample
+cards, sample orders, fake connection indicators, or Manapool integration.
+
+The eBay import is intentionally one-way and safe: it reads active listings and
+open orders from eBay, then writes the imported catalog to Supabase. There is no
+code in this version that revises, ends, or changes an eBay listing.
 
 ## Deploy
 
@@ -26,12 +28,12 @@ This creates fresh tables for eBay listings, physical SKUs, orders, allocations,
 sync events, Manapool mappings, and reconciliation issues. It does not migrate
 or reuse the previous database.
 
-### 3. Railway
+### 3. Render
 
-Create a Railway project from the GitHub repository. Railway reads
-`railway.json` and builds the included Node.js 22 Dockerfile automatically.
+Create a Docker Web Service from the GitHub repository. Render reads the
+included Dockerfile automatically.
 
-Add these variables in Railway:
+Add these variables in Render:
 
     EBAY_CLIENT_ID
     EBAY_CLIENT_SECRET
@@ -39,8 +41,6 @@ Add these variables in Railway:
     EBAY_MARKETPLACE_ID=EBAY_US
     SUPABASE_URL
     SUPABASE_SERVICE_ROLE_KEY
-    MANAPOOL_API_URL
-    MANAPOOL_API_KEY
     SYNC_CRON_SECRET
 
 Use the values from your new Supabase project and marketplace developer
@@ -52,7 +52,9 @@ accounts. Never commit real credentials to GitHub.
 - Supabase stores one physical SKU/location per card.
 - Reconciliation compares active physical SKUs with eBay quantity.
 - A discrepancy creates a review issue; it never changes eBay to match Supabase.
-- Manapool is Magic-only. A Manapool sale must update eBay first.
+- The initial eBay listing SKU becomes the first known physical location.
+- If eBay quantity is greater than known locations, the difference is flagged;
+  the importer never invents a location SKU.
 
 ## Local development
 

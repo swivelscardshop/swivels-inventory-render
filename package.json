@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "engines": {
     "node": "22.x"
@@ -15,6 +15,7 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.2.5",
     "@base-ui/react": "^1.7.0",
     "@hookform/resolvers": "^5.7.1",
     "@shadcn/react": "^0.3.0",

@@ -1,6 +1,16 @@
 -- Fresh Swivels Inventory schema. Run only against the new Supabase project.
 create extension if not exists pgcrypto;
 
+-- This project is intentionally a clean rebuild. Running this file clears only
+-- the inventory-system objects in this Supabase project.
+drop view if exists listing_reconciliation;
+drop table if exists order_allocations cascade;
+drop table if exists marketplace_orders cascade;
+drop table if exists reconciliation_issues cascade;
+drop table if exists sync_events cascade;
+drop table if exists physical_skus cascade;
+drop table if exists marketplace_listings cascade;
+
 create table marketplace_listings (
   id uuid primary key default gen_random_uuid(),
   ebay_listing_id text not null unique,
@@ -11,7 +21,7 @@ create table marketplace_listings (
   price numeric(12,2),
   ebay_quantity integer not null default 0 check (ebay_quantity >= 0),
   ebay_status text not null default 'active',
-  manapool_listing_id text,
+  image_url text,
   last_ebay_sync_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -32,7 +42,7 @@ create table physical_skus (
 
 create table marketplace_orders (
   id uuid primary key default gen_random_uuid(),
-  marketplace text not null check (marketplace in ('ebay','manapool')),
+  marketplace text not null check (marketplace = 'ebay'),
   marketplace_order_id text not null,
   listing_id uuid references marketplace_listings(id),
   quantity integer not null check (quantity > 0),
@@ -75,6 +85,7 @@ create table reconciliation_issues (
   details jsonb,
   first_seen_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now()
+  ,unique (listing_id, issue_type)
 );
 
 create index physical_skus_listing_status_idx on physical_skus(listing_id,status);
