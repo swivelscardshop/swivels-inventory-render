@@ -126,11 +126,13 @@ export async function getActiveListings(token: string) {
       const lower = title.toLowerCase();
       const specifics = specificMap(item);
       const gameSpecific = String(specifics.get("game") || "").toLowerCase();
-      const categoryId = String(item.PrimaryCategory?.CategoryID || "");
-      const isIndividualCard = categoryId === "183454";
+      const categoryName = String(item.PrimaryCategory?.CategoryName || "").toLowerCase();
+      const sealedTerms = /\b(booster box|booster pack|bundle|collection box|collector booster|draft booster|set booster|play booster|starter kit|commander deck|precon|sealed case|fat pack|theme deck)\b/;
+      const isSealedMagic = categoryName.includes("sealed") || sealedTerms.test(lower);
+      const isMagic = gameSpecific.includes("magic") || gameSpecific === "mtg" || lower.includes("magic: the gathering") || /\bmtg\b/.test(lower);
       const game: EbayListing["game"] = gameSpecific
-        ? (isIndividualCard && (gameSpecific.includes("magic") || gameSpecific === "mtg") ? "magic" : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") ? "pokemon" : "other")
-        : (isIndividualCard && (lower.includes("magic: the gathering") || /\bmtg\b/.test(lower)) ? "magic" : lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other");
+        ? (isMagic && !isSealedMagic ? "magic" : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") ? "pokemon" : "other")
+        : (isMagic && !isSealedMagic ? "magic" : lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other");
       const quantity = Math.max(0, Number(item.Quantity || 0) - Number(item.SellingStatus?.QuantitySold || 0));
       const identity = {
         title, game: specifics.get("game") || (lower.includes("magic") || lower.includes("mtg") ? "Magic" : "Pokémon TCG"),

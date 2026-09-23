@@ -760,11 +760,11 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
     setWorking(true); try { const r=await fetch("/api/manapool",{method:"PATCH"}); const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Order import failed"); notify(`Imported ${b.orders} Mana Pool orders and ${b.lines} order lines.`); } catch(e){notify(e instanceof Error?e.message:"Order import failed");} finally{setWorking(false);}
   };
   return <div className="stack">
-    <Intro title="Mana Pool connection" text="Sync Magic quantities and prices, then import orders into the same SKU allocation workflow." action={<span className={data?.configured?"healthy":"count"}>{data?.configured?"Connected":"Token required"}</span>} />
+    <Intro title="Mana Pool connection" text="Sync Magic: The Gathering singles from eBay, then import Mana Pool orders into the same SKU allocation workflow. Sealed Magic products are excluded." action={<span className={data?.configured?"healthy":"count"}>{data?.configured?"Connected":"Token required"}</span>} />
     {loading ? <Empty text="Loading Mana Pool status…"/> : <>
       <div className="metrics">
-        <Metric n={data?.mapped||0} t="Mapped Magic listings" d="Ready to preview" />
-        <Metric n={data?.unmapped||0} t="Needs mapping" d="TCGPlayer SKU missing" />
+        <Metric n={data?.mapped||0} t="Mapped Magic singles" d="Ready to preview" />
+        <Metric n={data?.unmapped||0} t="Singles needing mapping" d="Mana Pool identifier missing" />
         <Metric n={data?.enabled?"ON":"OFF"} t="Live writes" d="Controlled by Render setting" />
       </div>
       <section className="panel">
@@ -777,7 +777,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
         </div>
         {preview && <div className="warning"><Check/><div><b>{preview.total} mapped listings in preview</b><p>{preview.enabled?"Live sync is enabled.":"Live sync is still disabled in Render."}</p></div></div>}
       </section>
-      <section className="panel"><Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic listings"/><p className="bodycopy">Mana Pool updates by TCGPlayer SKU. Add each card's TCGPlayer SKU to Supabase before enabling live writes. Unmapped listings are never changed.</p></section>
+      <section className="panel"><Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic singles"/><p className="bodycopy">The next mapping step will match each eBay Magic single to Mana Pool's catalog using card name, set, collector number, condition, finish, and language. Unmatched or sealed listings are never changed.</p></section>
     </>}
   </div>;
 }
