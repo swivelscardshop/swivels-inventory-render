@@ -24,6 +24,7 @@ body{background:linear-gradient(145deg,#f8fbff 0%,#f1f6ff 62%,#fffaf0 100%);colo
 @media(max-width:760px){.logo>img{width:50px;height:50px}.logo .brand-name b{font-size:20px}}
 
 /* Horizontal order fulfillment rows */
+.order-categories{display:flex;gap:10px}.order-categories button{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid #cbdaf6;border-radius:10px;background:#fff;color:#526486;font-size:13px;font-weight:700}.order-categories button b{display:grid;place-items:center;min-width:24px;height:24px;padding:0 7px;border-radius:20px;background:#edf3ff;color:#1949bd;font-size:11px}.order-categories button.active{border-color:#1949bd;background:linear-gradient(135deg,#1949bd,#4d91fe);color:#fff;box-shadow:0 5px 15px #1949bd2b}.order-categories button.active b{background:#ffffff2b;color:#fff}
 .ordergrid{grid-template-columns:1fr;gap:12px}
 .order{display:grid;grid-template-columns:115px minmax(260px,1fr) 90px 125px minmax(220px,300px) 175px;align-items:center;gap:18px;padding:18px 20px}
 .order .ordertop{display:grid;gap:8px;align-self:stretch;align-content:center}

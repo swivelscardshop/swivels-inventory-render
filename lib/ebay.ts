@@ -113,6 +113,10 @@ export async function getActiveListings(token: string) {
       const title = String(item.Title || "Untitled listing");
       const lower = title.toLowerCase();
       const specifics = specificMap(item);
+      const gameSpecific = String(specifics.get("game") || "").toLowerCase();
+      const game: EbayListing["game"] = gameSpecific
+        ? (gameSpecific.includes("magic") || gameSpecific === "mtg" ? "magic" : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") ? "pokemon" : "other")
+        : (lower.includes("magic: the gathering") || /\bmtg\b/.test(lower) ? "magic" : lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other");
       const quantity = Math.max(0, Number(item.Quantity || 0) - Number(item.SellingStatus?.QuantitySold || 0));
       const identity = {
         title, game: specifics.get("game") || (lower.includes("magic") || lower.includes("mtg") ? "Magic" : "Pokémon TCG"),
@@ -124,7 +128,7 @@ export async function getActiveListings(token: string) {
       };
       results.push({
         ebay_listing_id: String(item.ItemID), ebay_sku: item.SKU ? String(item.SKU) : null, title,
-        game: lower.includes("magic") || lower.includes("mtg") ? "magic" : lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other",
+        game,
         set_name: identity.setName, card_name: identity.cardName, card_number: identity.cardNumber,
         finish: identity.finish, language: identity.language, condition_name: identity.condition,
         parallel_variety: identity.parallel, match_key: cardMatchKey(identity) || null,

@@ -654,6 +654,10 @@ function Inventory({
 }
 function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[]; loading: boolean; reload: () => Promise<void>; notify: (message: string) => void; confirmAction: ConfirmAction }) {
   const [shipping, setShipping] = useState<string | null>(null);
+  const [orderCategory, setOrderCategory] = useState<"ebay" | "manapool">("ebay");
+  const ebayOrders = rows.filter((row) => row.marketplace !== "manapool");
+  const manaPoolOrders = rows.filter((row) => row.marketplace === "manapool");
+  const displayedOrders = orderCategory === "ebay" ? ebayOrders : manaPoolOrders;
   const confirmShipped = async (order: any) => {
     if (!(await confirmAction({
       title: "Confirm shipment?",
@@ -681,12 +685,16 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
         text="The displayed SKU is reserved in Supabase for this order. It is removed only after you click Confirm shipped."
         action={<span className="count">Up to 50 order lines</span>}
       />
+      <div className="order-categories" role="tablist" aria-label="Order marketplace">
+        <button className={orderCategory === "ebay" ? "active" : ""} onClick={() => setOrderCategory("ebay")}><span>eBay orders</span><b>{ebayOrders.length}</b></button>
+        <button className={orderCategory === "manapool" ? "active" : ""} onClick={() => setOrderCategory("manapool")}><span>Mana Pool orders</span><b>{manaPoolOrders.length}</b></button>
+      </div>
       {loading ? (
         <Empty text="Loading orders…" />
       ) : (
         <>
           <div className="ordergrid">
-            {rows.map((o) => {
+            {displayedOrders.map((o) => {
               const l = o.marketplace_listings;
               const image = l?.image_url || o.raw_payload?.image_url;
               const total = o.marketplace === "manapool"
@@ -727,8 +735,8 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
               );
             })}
           </div>
-          {!rows.length && (
-            <Empty text="No real open orders have been imported." />
+          {!displayedOrders.length && (
+            <Empty text={orderCategory === "ebay" ? "No open eBay orders have been imported." : "No open Mana Pool orders have been imported."} />
           )}
         </>
       )}
