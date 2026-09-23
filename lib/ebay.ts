@@ -69,12 +69,15 @@ export async function exchangeAuthorizationCode(code: string) {
 const arr = <T>(value: T | T[] | undefined): T[] => value == null ? [] : Array.isArray(value) ? value : [value];
 
 function bestEbayImage(item: any) {
-  const pictureUrls = arr<any>(item.PictureDetails?.PictureURL).map(String).filter(Boolean);
-  const original = pictureUrls[0] || String(item.PictureDetails?.GalleryURL || "");
+  const textValue = (value: any) => typeof value === "string" ? value : value?.["#text"] ? String(value["#text"]) : "";
+  const pictureUrls = arr<any>(item.PictureDetails?.PictureURL).map(textValue).filter(Boolean);
+  const original = pictureUrls[0] || textValue(item.PictureDetails?.GalleryURL);
   if (!original) return null;
-  // eBay's GalleryURL is usually a small thumbnail. Its image CDN supports a
-  // larger rendition by replacing the s-l### size segment.
-  return original.replace(/s-l\d+(?=\.(?:jpg|jpeg|png|webp)(?:\?|$))/i, "s-l1600");
+  // eBay uses both modern /s-l### image paths and older /$_#.JPG paths.
+  // Convert either thumbnail form to its high-resolution listing rendition.
+  return original
+    .replace(/\/s-l\d+\.(jpg|jpeg|png|webp)/i, "/s-l1600.$1")
+    .replace(/\/\$_\d+\.(jpg|jpeg|png|webp)/i, "/$_57.$1");
 }
 
 export type EbayListing = {
@@ -123,9 +126,11 @@ export async function getActiveListings(token: string) {
       const lower = title.toLowerCase();
       const specifics = specificMap(item);
       const gameSpecific = String(specifics.get("game") || "").toLowerCase();
+      const categoryId = String(item.PrimaryCategory?.CategoryID || "");
+      const isIndividualCard = categoryId === "183454";
       const game: EbayListing["game"] = gameSpecific
         ? (gameSpecific.includes("magic") || gameSpecific === "mtg" ? "magic" : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") ? "pokemon" : "other")
-        : (lower.includes("magic: the gathering") || /\bmtg\b/.test(lower) ? "magic" : lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other");
+        : (isIndividualCard && (lower.includes("magic: the gathering") || /\bmtg\b/.test(lower)) ? "magic" : lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other");
       const quantity = Math.max(0, Number(item.Quantity || 0) - Number(item.SellingStatus?.QuantitySold || 0));
       const identity = {
         title, game: specifics.get("game") || (lower.includes("magic") || lower.includes("mtg") ? "Magic" : "Pokémon TCG"),
