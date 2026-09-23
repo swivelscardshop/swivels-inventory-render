@@ -688,16 +688,28 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
           <div className="ordergrid">
             {rows.map((o) => {
               const l = o.marketplace_listings;
+              const image = l?.image_url || o.raw_payload?.image_url;
+              const total = o.marketplace === "manapool"
+                ? (o.raw_payload?.mana_pool_order?.total_cents ?? o.raw_payload?.total_cents)
+                : o.raw_payload?.orderTotal;
+              const totalText = total == null ? "—" : o.marketplace === "manapool"
+                ? `$${(Number(total) / 100).toFixed(2)}`
+                : new Intl.NumberFormat("en-US", { style: "currency", currency: o.raw_payload?.currency || "USD" }).format(Number(total));
               return (
                 <article className="order" key={o.id}>
                   <div className="ordertop">
                     <span>{o.marketplace === "manapool" ? "Mana Pool" : "eBay"}</span>
                     <small>{new Date(o.ordered_at).toLocaleString()}</small>
                   </div>
-                  <h3>{o.order_title || l?.title || "eBay order"}</h3>
-                  <p>
-                    Order #{o.marketplace_order_id} · Quantity {o.quantity}
-                  </p>
+                  <div className="order-card-info">
+                    <div className="card-title-hover">
+                      <h3>{o.order_title || l?.title || "eBay order"}</h3>
+                      {image && <div className="card-image-popover"><img src={image} alt={o.order_title || l?.title || "Card"} /></div>}
+                    </div>
+                    <p>Order #{o.marketplace_order_id}</p>
+                  </div>
+                  <div className="order-stat"><small>QUANTITY</small><b>{o.quantity}</b></div>
+                  <div className="order-stat"><small>ORDER TOTAL</small><b>{totalText}</b></div>
                   <div className="location">
                     <small>PULL LOCATION / SOLD SKU</small>
                     <b>

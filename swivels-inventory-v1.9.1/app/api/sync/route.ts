@@ -78,15 +78,27 @@ export async function POST() {
       const orders = await getOpenOrders(token);
       const legacyIds = [...new Set(orders.flatMap((order: any) => (order.lineItems || []).map((line: any) => String(line.legacyItemId || ""))).filter(Boolean))];
       const orderListings: any[] = [];
-      for (const group of chunks(legacyIds, 150)) orderListings.push(...await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku&ebay_listing_id=in.(${group.join(",")})`));
+      for (const group of chunks(legacyIds, 150)) orderListings.push(...await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url&ebay_listing_id=in.(${group.join(",")})`));
       const orderListingMap = new Map(orderListings.map(x => [String(x.ebay_listing_id), x]));
       const orderIds = orders.map((x: any) => String(x.orderId));
       const existing: any[] = [];
-      for (const group of chunks(orderIds, 100)) existing.push(...await db(`marketplace_orders?select=marketplace_order_id,listing_id&marketplace_order_id=in.(${group.join(",")})`));
-      const existingKeys = new Set(existing.map(x => `${x.marketplace_order_id}|${x.listing_id}`));
+      for (const group of chunks(orderIds, 100)) existing.push(...await db(`marketplace_orders?select=id,marketplace_order_id,listing_id&marketplace_order_id=in.(${group.join(",")})`));
+      const existingMap = new Map(existing.map(x => [`${x.marketplace_order_id}|${x.listing_id}`, x]));
       for (const order of orders) for (const line of order.lineItems || []) {
         const listing = orderListingMap.get(String(line.legacyItemId || ""));
-        if (!listing || existingKeys.has(`${order.orderId}|${listing.id}`)) continue;
+        if (!listing) continue;
+        const rawPayload = {
+          lineItemId: line.lineItemId,
+          legacyItemId: line.legacyItemId,
+          orderTotal: order.pricingSummary?.total?.value ?? null,
+          lineTotal: line.lineItemCost?.value ?? null,
+          currency: order.pricingSummary?.total?.currency ?? "USD",
+        };
+        const existingOrder = existingMap.get(`${order.orderId}|${listing.id}`);
+        if (existingOrder) {
+          await db(`marketplace_orders?id=eq.${existingOrder.id}`, { method: "PATCH", body: JSON.stringify({ raw_payload: rawPayload, order_title: listing.title }) });
+          continue;
+        }
         const soldQuantity = Math.max(1, Number(line.quantity || 1));
         const locations = await db(`physical_skus?select=id,sku,location_label,created_at&listing_id=eq.${listing.id}&status=eq.available&order=created_at.asc&limit=500`);
         // Pull the surviving eBay listing's own location first, then attached
@@ -100,7 +112,7 @@ export async function POST() {
           pull_sku: pulled.length ? pulled.map((x: any) => x.sku).join(", ") : listing.ebay_sku || null,
           pull_location: pulled.length ? pulled.map((x: any) => x.location_label).join(", ") : listing.ebay_sku || null,
           sku_removed_at: null,
-          raw_payload: { lineItemId: line.lineItemId, legacyItemId: line.legacyItemId } };
+          raw_payload: rawPayload };
         await db("marketplace_orders?on_conflict=marketplace,marketplace_order_id,listing_id", {
           method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(row),
         });
