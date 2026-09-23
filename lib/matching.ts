@@ -8,7 +8,7 @@ const clean = (value?: string | null) => String(value || "").toLowerCase()
   .normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 
 const titleCardName = (title?: string | null) => clean(title)
-  .replace(/\b(pokemon|pokémon|tcg|near mint|nm|lightly played|lp|english|card)\b/g, " ")
+  .replace(/\b(pokemon|pokémon|tcg|near mint(?: or better)?|nm|light play|lightly played|lp|moderate play|moderately played|mod play|mp|heavy play|heavily played|hp|damaged|damage|dmg|english|card)\b/g, " ")
   .replace(/\b\d{1,3}\s*\/\s*\d{1,3}\b/g, " ").replace(/\s+/g, " ").trim();
 
 const conditionKey = (value?: string | null) => {
@@ -30,8 +30,12 @@ export function cardMatchKey(card: CardIdentity) {
   const language = clean(card.language) || "english";
   const condition = conditionKey(card.condition);
   const parallel = clean(card.parallel);
-  // Condition is part of identity: NM, LP, MP, HP and DMG are separate listings.
-  // Refuse to classify a listing when it is missing instead of guessing.
+  // eBay's bulk active-list response omits Item Specifics. Card Uploader uses a
+  // consistent title, so an exact normalized title plus condition is the safe
+  // common identity shared by the live listing and the intake CSV.
+  const titleIdentity = titleCardName(card.title);
+  if (titleIdentity && condition) return ["title", titleIdentity, condition].join("|");
+  // Structured fallback for sources that do not include a listing title.
   if (!setName || !cardName || !cardNumber || !condition) return "";
   return [game, setName, cardName, cardNumber, finish, language, condition, parallel].join("|");
 }

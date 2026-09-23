@@ -1,6 +1,6 @@
 # Swivels Inventory
 
-## Current package — v1.5.0
+## Current package — v1.5.1
 
 This is the real-data Render application with built-in eBay OAuth. The app gets
 and stores the long-lived eBay refresh token after you click **Connect eBay**.
@@ -12,8 +12,8 @@ browser confirmation.
 
 ### Duplicate and CSV workflow
 
-- Duplicate Center scans active listings by game, set, card name, card number,
-  finish, language, condition, and parallel/variety.
+- Duplicate Center uses a normalized Card Uploader title plus eBay condition so
+  it works even though eBay omits Item Specifics from its bulk active-list call.
 - NM, LP, MP, HP, and DMG copies of the same card are separate valid listings.
 - CSV Intake accepts the Card Uploader eBay CSV layout and generates a CSV with
   the same ordered columns containing only genuinely new unique listings.
