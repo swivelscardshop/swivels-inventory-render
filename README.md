@@ -1,6 +1,6 @@
 # Swivels Inventory
 
-## Current package — v1.7.1
+## Current package — v1.8.0
 
 This is the real-data Render application with built-in eBay OAuth. The app gets
 and stores the long-lived eBay refresh token after you click **Connect eBay**.
@@ -26,6 +26,10 @@ browser confirmation.
   first; later sales use the next available physical SKU.
 - An allocated SKU stays in Supabase until **Confirm shipped** is clicked on
   the Orders page. That confirmation permanently removes only that order's SKU.
+- Confirmations use the application's modern review dialog instead of the
+  browser popup. Status messages appear as dismissible notifications.
+- The interface uses the Swivels Card Shop dragon logo and its official blue,
+  cyan, violet, orange, cream, and yellow brand palette.
 
 ### Low-egress design
 

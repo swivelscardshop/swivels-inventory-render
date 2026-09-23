@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Swivels Inventory",
+  title: "Swivels Card Shop Inventory",
   description: "eBay-master inventory and SKU reconciliation for Swivels Card Shop",
   other: {
     "codex-preview": "development",
   },
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/swivels-card-shop-logo.jpg",
+    shortcut: "/swivels-card-shop-logo.jpg",
   },
 };
 

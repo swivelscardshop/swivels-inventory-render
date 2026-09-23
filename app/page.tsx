@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Boxes,
@@ -50,6 +50,13 @@ type Listing = {
   ebay_quantity: number;
   physical_skus: any[];
 };
+type ConfirmOptions = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  tone?: "primary" | "danger";
+};
+type ConfirmAction = (options: ConfirmOptions) => Promise<boolean>;
 const nav = [
   ["dashboard", "Dashboard", LayoutDashboard],
   ["inventory", "Inventory", Boxes],
@@ -76,7 +83,20 @@ export default function Home() {
     [page, setPage] = useState(1),
     [total, setTotal] = useState(0),
     [loading, setLoading] = useState(false),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""),
+    [confirmation, setConfirmation] = useState<ConfirmOptions | null>(null);
+  const confirmationResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  const confirmAction: ConfirmAction = useCallback((options) => {
+    return new Promise((resolve) => {
+      confirmationResolver.current = resolve;
+      setConfirmation(options);
+    });
+  }, []);
+  const closeConfirmation = useCallback((confirmed: boolean) => {
+    confirmationResolver.current?.(confirmed);
+    confirmationResolver.current = null;
+    setConfirmation(null);
+  }, []);
   const load = useCallback(async () => {
     const s: any = await fetch("/api/status", { cache: "no-store" }).then((r) =>
       r.json(),
@@ -150,13 +170,17 @@ export default function Home() {
   useEffect(() => {
     if (view === "duplicates" && status.ready) loadDuplicates();
   }, [view, status.ready, loadDuplicates]);
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(""), 6000);
+    return () => window.clearTimeout(timer);
+  }, [message]);
   const sync = async () => {
-    if (
-      !confirm(
-        "Import current active listings and open orders from eBay into the fresh Supabase database? This reads eBay only and will NOT change any eBay listing.",
-      )
-    )
-      return;
+    if (!(await confirmAction({
+      title: "Import current eBay data?",
+      message: "This imports active listings and open orders into Supabase. The import itself does not change any eBay listing.",
+      confirmLabel: "Import from eBay",
+    }))) return;
     setBusy(true);
     setMessage("");
     try {
@@ -178,10 +202,10 @@ export default function Home() {
     <div className="shell">
       <aside className={mobile ? "open" : ""}>
         <div className="logo">
-          <span>◓</span>
-          <div>
-            <b>SWIVELS</b>
-            <small>INVENTORY</small>
+          <img src="/swivels-card-shop-logo.jpg" alt="Swivels Card Shop" />
+          <div className="brand-name">
+            <b>Swivels</b>
+            <small>Card Shop</small>
           </div>
           <button onClick={() => setMobile(false)}>
             <X />
@@ -218,8 +242,8 @@ export default function Home() {
         <div className="profile">
           <span>SC</span>
           <div>
-            <b>Swivels</b>
-            <small>Card Shop</small>
+            <b>Swivels Card Shop</b>
+            <small>Inventory Manager</small>
           </div>
         </div>
       </aside>
@@ -230,7 +254,7 @@ export default function Home() {
             <Menu />
           </button>
           <div>
-            <small>SWIVELS CARD SHOP</small>
+            <small className="header-brand">SWIVELS CARD SHOP</small>
             <h1>{nav.find((x) => x[0] === view)?.[1]}</h1>
           </div>
           <div className="head">
@@ -256,7 +280,7 @@ export default function Home() {
           </div>
         </header>
         <div className="content">
-          {message && <div className="notice">{message}</div>}
+          {message && <div className="toast" role="status"><Check /><span>{message}</span><button aria-label="Dismiss message" onClick={() => setMessage("")}><X /></button></div>}
           {status.error && (
             <div className="warning">
               <AlertTriangle />
@@ -281,13 +305,14 @@ export default function Home() {
               loading={loading}
             />
           )}{" "}
-          {view === "orders" && <Orders rows={orders} loading={loading} reload={loadOrders} notify={setMessage} />}{" "}
+          {view === "orders" && <Orders rows={orders} loading={loading} reload={loadOrders} notify={setMessage} confirmAction={confirmAction} />}{" "}
           {view === "duplicates" && (
             <Duplicates
               groups={duplicateGroups}
               loading={loading}
               reload={loadDuplicates}
               setMessage={setMessage}
+              confirmAction={confirmAction}
             />
           )}{" "}
           {view === "intake" && (
@@ -295,12 +320,39 @@ export default function Home() {
               data={intake}
               setData={setIntake}
               setMessage={setMessage}
+              confirmAction={confirmAction}
             />
           )}{" "}
           {view === "sync" && <Sync s={status} busy={busy} sync={sync} />}{" "}
           {view === "settings" && <Connections s={status} />}
         </div>
       </main>
+      {confirmation && <ConfirmDialog options={confirmation} onDecision={closeConfirmation} />}
+    </div>
+  );
+}
+function ConfirmDialog({ options, onDecision }: { options: ConfirmOptions; onDecision: (confirmed: boolean) => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onDecision(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onDecision]);
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={() => onDecision(false)}>
+      <section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="modal-close" aria-label="Close" onClick={() => onDecision(false)}><X /></button>
+        <div className={`modal-icon ${options.tone === "danger" ? "danger" : ""}`}>
+          {options.tone === "danger" ? <AlertTriangle /> : <Check />}
+        </div>
+        <h2 id="confirm-title">{options.title}</h2>
+        <p>{options.message}</p>
+        <div className="modal-actions">
+          <button className="secondary" onClick={() => onDecision(false)}>Cancel</button>
+          <button className={options.tone === "danger" ? "danger-button" : "primary"} onClick={() => onDecision(true)}>{options.confirmLabel}</button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -587,10 +639,15 @@ function Inventory({
     </div>
   );
 }
-function Orders({ rows, loading, reload, notify }: { rows: any[]; loading: boolean; reload: () => Promise<void>; notify: (message: string) => void }) {
+function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[]; loading: boolean; reload: () => Promise<void>; notify: (message: string) => void; confirmAction: ConfirmAction }) {
   const [shipping, setShipping] = useState<string | null>(null);
   const confirmShipped = async (order: any) => {
-    if (!confirm(`Confirm order #${order.marketplace_order_id} has shipped? This permanently removes its allocated SKU from Supabase.`)) return;
+    if (!(await confirmAction({
+      title: "Confirm shipment?",
+      message: `Order #${order.marketplace_order_id} will be completed and its allocated SKU will be permanently removed from Supabase. Only continue after the card has shipped.`,
+      confirmLabel: "Confirm shipped",
+      tone: "danger",
+    }))) return;
     setShipping(order.id);
     try {
       const response = await fetch("/api/orders", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: order.id }) });
@@ -658,19 +715,21 @@ function Duplicates({
   loading,
   reload,
   setMessage,
+  confirmAction,
 }: {
   groups: any[];
   loading: boolean;
   reload: () => Promise<void>;
   setMessage: (v: string) => void;
+  confirmAction: ConfirmAction;
 }) {
   const combine = async (group: any, survivorEbayId: string) => {
-    if (
-      !confirm(
-        `Combine ${group.listings.length} live eBay listings into the newest listing? Its quantity will increase, all older listings will end, and every location SKU will be kept in Supabase.`,
-      )
-    )
-      return;
+    if (!(await confirmAction({
+      title: "Combine duplicate listings?",
+      message: `${group.listings.length} live eBay listings will be combined into the newest listing. Its quantity will increase, older listings will end, and every location SKU will remain in Supabase.`,
+      confirmLabel: "Combine into newest",
+      tone: "danger",
+    }))) return;
     try {
       const r = await fetch("/api/duplicates", {
         method: "POST",
@@ -738,10 +797,12 @@ function CsvIntake({
   data,
   setData,
   setMessage,
+  confirmAction,
 }: {
   data: any;
   setData: (v: any) => void;
   setMessage: (v: string) => void;
+  confirmAction: ConfirmAction;
 }) {
   const [busy, setBusy] = useState(false);
   const preview = async (file?: File) => {
@@ -777,12 +838,12 @@ function CsvIntake({
   };
   const apply = async () => {
     if (!data || data.conflicts.length) return;
-    if (
-      !confirm(
-        `Update ${data.matchedCopies} existing-card quantities and store ${data.matchedCopies + data.newCopies} physical SKUs? This changes live eBay quantities for matched cards.`,
-      )
-    )
-      return;
+    if (!(await confirmAction({
+      title: "Apply CSV inventory changes?",
+      message: `${data.matchedCopies} existing-card quantities will be updated and ${data.matchedCopies + data.newCopies} physical SKUs will be stored. This changes live eBay quantities for matched cards.`,
+      confirmLabel: "Apply changes",
+      tone: "danger",
+    }))) return;
     setBusy(true);
     try {
       const r = await fetch("/api/csv-intake/apply", {
