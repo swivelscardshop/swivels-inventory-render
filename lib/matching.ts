@@ -8,8 +8,10 @@ const clean = (value?: string | null) => String(value || "").toLowerCase()
   .normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 
 const titleCardName = (title?: string | null) => clean(title)
-  .replace(/\b(pokemon|pokémon|tcg|near mint(?: or better)?|nm|light play|lightly played|lp|moderate play|moderately play|moderately played|mod play|mp|heavy play|heavily played|hp|damaged|damage|dmg|english|card)\b/g, " ")
-  .replace(/\b\d{1,3}\s*\/\s*\d{1,3}\b/g, " ").replace(/\s+/g, " ").trim();
+  // Keep card number, set, variant, game and language. Remove only condition
+  // wording because condition is normalized into its own identity component.
+  .replace(/\b(near mint(?: or better)?|nm|light play|lightly played|lp|moderate play|moderately play|moderately played|mod play|mp|heavy play|heavily played|hp|damaged|damage|dmg)\b/g, " ")
+  .replace(/\s+/g, " ").trim();
 
 const conditionKey = (value?: string | null) => {
   const v = clean(value).replace(/^ungraded\s+/, "").replace(/\bid\s+\d+\b/g, "").trim();

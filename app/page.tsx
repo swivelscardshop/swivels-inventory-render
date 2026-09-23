@@ -656,7 +656,11 @@ function Duplicates({
       const r = await fetch("/api/duplicates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matchKey: group.matchKey, survivorId }),
+        body: JSON.stringify({
+          matchKey: group.matchKey,
+          survivorId,
+          listingIds: group.listings.map((x: any) => x.id),
+        }),
       });
       const b: any = await r.json();
       if (!r.ok) throw new Error(b.error || "Combine failed");
@@ -691,7 +695,7 @@ function Duplicates({
                   <small>
                     {x.set_name || "Set missing"} · #{x.card_number || "—"} ·{" "}
                     {x.finish || "Standard"} ·{" "}
-                    <strong>{x.condition_name || "Condition missing"}</strong>
+                    <strong>{x.condition_name || x.detected_condition || "Condition missing"}</strong>
                   </small>
                   <small>
                     eBay #{x.ebay_listing_id} · SKU {x.ebay_sku || "—"} · Qty{" "}

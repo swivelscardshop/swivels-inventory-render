@@ -1,6 +1,6 @@
 # Swivels Inventory
 
-## Current package — v1.5.3
+## Current package — v1.5.5
 
 This is the real-data Render application with built-in eBay OAuth. The app gets
 and stores the long-lived eBay refresh token after you click **Connect eBay**.
