@@ -68,6 +68,15 @@ export async function exchangeAuthorizationCode(code: string) {
 
 const arr = <T>(value: T | T[] | undefined): T[] => value == null ? [] : Array.isArray(value) ? value : [value];
 
+function bestEbayImage(item: any) {
+  const pictureUrls = arr<any>(item.PictureDetails?.PictureURL).map(String).filter(Boolean);
+  const original = pictureUrls[0] || String(item.PictureDetails?.GalleryURL || "");
+  if (!original) return null;
+  // eBay's GalleryURL is usually a small thumbnail. Its image CDN supports a
+  // larger rendition by replacing the s-l### size segment.
+  return original.replace(/s-l\d+(?=\.(?:jpg|jpeg|png|webp)(?:\?|$))/i, "s-l1600");
+}
+
 export type EbayListing = {
   ebay_listing_id: string; ebay_sku: string | null; title: string; game: "pokemon" | "magic" | "other";
   set_name: string | null; price: number; ebay_quantity: number; ebay_status: "active"; image_url: string | null;
@@ -133,7 +142,7 @@ export async function getActiveListings(token: string) {
         finish: identity.finish, language: identity.language, condition_name: identity.condition,
         parallel_variety: identity.parallel, match_key: cardMatchKey(identity) || null,
         price: Number(item.SellingStatus?.CurrentPrice?.["#text"] ?? item.SellingStatus?.CurrentPrice ?? 0),
-        ebay_quantity: quantity, ebay_status: "active", image_url: item.PictureDetails?.GalleryURL || null,
+        ebay_quantity: quantity, ebay_status: "active", image_url: bestEbayImage(item),
         last_ebay_sync_at: now, updated_at: now,
         started_at: item.ListingDetails?.StartTime ? String(item.ListingDetails.StartTime) : null,
       });
