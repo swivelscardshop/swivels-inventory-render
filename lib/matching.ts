@@ -8,17 +8,27 @@ const clean = (value?: string | null) => String(value || "").toLowerCase()
   .normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 
 const titleCardName = (title?: string | null) => clean(title)
-  .replace(/\b(pokemon|pokémon|tcg|near mint(?: or better)?|nm|light play|lightly played|lp|moderate play|moderately played|mod play|mp|heavy play|heavily played|hp|damaged|damage|dmg|english|card)\b/g, " ")
+  .replace(/\b(pokemon|pokémon|tcg|near mint(?: or better)?|nm|light play|lightly played|lp|moderate play|moderately play|moderately played|mod play|mp|heavy play|heavily played|hp|damaged|damage|dmg|english|card)\b/g, " ")
   .replace(/\b\d{1,3}\s*\/\s*\d{1,3}\b/g, " ").replace(/\s+/g, " ").trim();
 
 const conditionKey = (value?: string | null) => {
   const v = clean(value).replace(/^ungraded\s+/, "").replace(/\bid\s+\d+\b/g, "").trim();
   if (/^(near mint|near mint or better|nm)$/.test(v)) return "near mint";
   if (/^(light play|lightly played|lp)$/.test(v)) return "light play";
-  if (/^(moderate play|moderately played|mod play|mp)$/.test(v)) return "moderate play";
+  if (/^(moderate play|moderately play|moderately played|mod play|mp)$/.test(v)) return "moderately play";
   if (/^(heavy play|heavily played|hp)$/.test(v)) return "heavy play";
   if (/^(damaged|damage|dmg)$/.test(v)) return "damaged";
   return v;
+};
+
+const titleCondition = (title?: string | null) => {
+  const v = clean(title);
+  if (/\b(near mint(?: or better)?|nm)\b/.test(v)) return "near mint";
+  if (/\b(light play|lightly played|lp)\b/.test(v)) return "light play";
+  if (/\b(moderate play|moderately play|moderately played|mod play|mp)\b/.test(v)) return "moderately play";
+  if (/\b(heavy play|heavily played|hp)\b/.test(v)) return "heavy play";
+  if (/\b(damaged|damage|dmg)\b/.test(v)) return "damaged";
+  return "";
 };
 
 export function cardMatchKey(card: CardIdentity) {
@@ -28,7 +38,7 @@ export function cardMatchKey(card: CardIdentity) {
   const cardNumber = clean(card.cardNumber);
   const finish = clean(card.finish) || "standard";
   const language = clean(card.language) || "english";
-  const condition = conditionKey(card.condition);
+  const condition = conditionKey(card.condition) || titleCondition(card.title);
   const parallel = clean(card.parallel);
   // eBay's bulk active-list response omits Item Specifics. Card Uploader uses a
   // consistent title, so an exact normalized title plus condition is the safe
