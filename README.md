@@ -1,6 +1,6 @@
 # Swivels Inventory
 
-## Current package — v1.3.0
+## Current package — v1.4.0
 
 This is the real-data Render application with built-in eBay OAuth. The app gets
 and stores the long-lived eBay refresh token after you click **Connect eBay**.
@@ -8,6 +8,16 @@ You no longer need to copy a short-lived access token into Render.
 
 The import is one-way and read-only: it reads active listings and open orders
 from eBay and stores them in Supabase. It never revises or ends an eBay listing.
+
+### Low-egress design
+
+- The dashboard requests only totals and five recent orders.
+- Inventory is loaded only when the Inventory page is opened.
+- Inventory search and pagination run on the server, with 50 listings returned
+  per request instead of downloading the complete catalog.
+- Orders are loaded only when the Orders page is opened and are limited to the
+  50 currently actionable order lines.
+- Changing dashboard views does not repeatedly download the full catalog.
 
 ## Upgrade an existing v1.2.0 deployment
 
