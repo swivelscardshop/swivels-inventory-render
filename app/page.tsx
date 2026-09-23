@@ -760,7 +760,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
     setWorking(true); try { const r=await fetch("/api/manapool",{method:"PATCH"}); const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Order import failed"); notify(`Imported ${b.orders} Mana Pool orders and ${b.lines} order lines.`); } catch(e){notify(e instanceof Error?e.message:"Order import failed");} finally{setWorking(false);}
   };
   return <div className="stack">
-    <Intro title="Mana Pool connection" text="Sync Magic: The Gathering singles from eBay, then import Mana Pool orders into the same SKU allocation workflow. Sealed Magic products are excluded." action={<span className={data?.configured?"healthy":"count"}>{data?.configured?"Connected":"Token required"}</span>} />
+    <Intro title="Mana Pool connection" text="Sync listings assigned to your eBay Store category Magic The Gathering → Magic The Gathering Singles. Sealed Magic products remain excluded." action={<span className={data?.configured?"healthy":"count"}>{data?.configured?"Connected":"Token required"}</span>} />
     {loading ? <Empty text="Loading Mana Pool status…"/> : <>
       <div className="metrics">
         <Metric n={data?.mapped||0} t="Mapped Magic singles" d="Ready to preview" />

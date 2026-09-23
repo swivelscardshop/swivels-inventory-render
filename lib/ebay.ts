@@ -98,9 +98,35 @@ const specificMap = (item: any) => {
   return map;
 };
 
+async function getMagicSinglesStoreCategoryIds(token: string) {
+  const xml = `<?xml version="1.0" encoding="utf-8"?><GetStoreRequest xmlns="urn:ebay:apis:eBLBaseComponents"><CategoryStructureOnly>true</CategoryStructureOnly></GetStoreRequest>`;
+  const response = await fetch("https://api.ebay.com/ws/api.dll", {
+    method: "POST", cache: "no-store",
+    headers: {
+      "X-EBAY-API-CALL-NAME": "GetStore", "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1423", "X-EBAY-API-IAF-TOKEN": token,
+      "Content-Type": "text/xml",
+    }, body: xml,
+  });
+  const text = await response.text();
+  if (!response.ok) return new Set<string>();
+  const parsed: any = new XMLParser({ ignoreAttributes: false, parseTagValue: true }).parse(text)?.GetStoreResponse;
+  if (!["Success", "Warning"].includes(parsed?.Ack)) return new Set<string>();
+  const matches = new Set<string>();
+  const visit = (category: any) => {
+    if (!category) return;
+    const name = String(category.Name || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (name === "magic the gathering singles") matches.add(String(category.CategoryID));
+    for (const child of arr<any>(category.ChildCategory)) visit(child);
+  };
+  for (const category of arr<any>(parsed?.Store?.CustomCategories?.CustomCategory)) visit(category);
+  return matches;
+}
+
 export async function getActiveListings(token: string) {
   const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: true });
   const results: EbayListing[] = [];
+  const magicSinglesStoreCategoryIds = await getMagicSinglesStoreCategoryIds(token);
   let page = 1, more = true;
   while (more) {
     const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList><DetailLevel>ReturnAll</DetailLevel></GetMyeBaySellingRequest>`;
@@ -130,9 +156,12 @@ export async function getActiveListings(token: string) {
       const sealedTerms = /\b(booster box|booster pack|bundle|collection box|collector booster|draft booster|set booster|play booster|starter kit|commander deck|precon|sealed case|fat pack|theme deck)\b/;
       const isSealedMagic = categoryName.includes("sealed") || sealedTerms.test(lower);
       const isMagic = gameSpecific.includes("magic") || gameSpecific === "mtg" || lower.includes("magic: the gathering") || /\bmtg\b/.test(lower);
-      const game: EbayListing["game"] = gameSpecific
-        ? (isMagic && !isSealedMagic ? "magic" : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") ? "pokemon" : "other")
-        : (isMagic && !isSealedMagic ? "magic" : lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other");
+      const storeCategoryIds = [item.Storefront?.StoreCategoryID, item.Storefront?.StoreCategory2ID].filter(Boolean).map(String);
+      const isMagicStoreSingle = storeCategoryIds.some((id) => magicSinglesStoreCategoryIds.has(id));
+      const magicEligible = magicSinglesStoreCategoryIds.size > 0 ? isMagicStoreSingle : isMagic && !isSealedMagic;
+      const game: EbayListing["game"] = magicEligible
+        ? "magic"
+        : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") || lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other";
       const quantity = Math.max(0, Number(item.Quantity || 0) - Number(item.SellingStatus?.QuantitySold || 0));
       const identity = {
         title, game: specifics.get("game") || (lower.includes("magic") || lower.includes("mtg") ? "Magic" : "Pokémon TCG"),
