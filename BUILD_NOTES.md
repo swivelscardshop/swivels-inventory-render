@@ -6,7 +6,7 @@
 2. Supabase stores one physical SKU/location row per physical card.
 3. Reconciliation compares active Supabase SKU rows to eBay quantity.
 4. A mismatch never changes eBay to match Supabase.
-5. An eBay order allocates an available physical SKU and exposes it as the pull location.
+5. An eBay order allocates the primary SKU first, exposes it as the pull location, and keeps it reserved until the user confirms shipment.
 6. A Manapool sale updates eBay first; the new eBay quantity then becomes authoritative.
 7. Manapool is used only for Magic listings.
 

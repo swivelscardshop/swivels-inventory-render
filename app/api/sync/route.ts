@@ -88,23 +88,30 @@ export async function POST() {
         const listing = orderListingMap.get(String(line.legacyItemId || ""));
         if (!listing || existingKeys.has(`${order.orderId}|${listing.id}`)) continue;
         const soldQuantity = Math.max(1, Number(line.quantity || 1));
-        const locations = await db(`physical_skus?select=id,sku,location_label&listing_id=eq.${listing.id}&status=eq.available&order=created_at.asc&limit=${soldQuantity}`);
-        const pulled = locations || [];
+        const locations = await db(`physical_skus?select=id,sku,location_label,created_at&listing_id=eq.${listing.id}&status=eq.available&order=created_at.asc&limit=500`);
+        // Pull the surviving eBay listing's own location first, then attached
+        // duplicate/CSV locations in their original intake order.
+        const pulled = [...(locations || [])]
+          .sort((a: any, b: any) => Number(b.sku === listing.ebay_sku) - Number(a.sku === listing.ebay_sku) || String(a.created_at).localeCompare(String(b.created_at)))
+          .slice(0, soldQuantity);
         const row = { marketplace: "ebay", marketplace_order_id: String(order.orderId), listing_id: listing.id,
           quantity: soldQuantity, fulfillment_status: "unfulfilled", refunded: false,
           ordered_at: order.creationDate || new Date().toISOString(), order_title: listing.title,
           pull_sku: pulled.length ? pulled.map((x: any) => x.sku).join(", ") : listing.ebay_sku || null,
           pull_location: pulled.length ? pulled.map((x: any) => x.location_label).join(", ") : listing.ebay_sku || null,
-          sku_removed_at: pulled.length ? new Date().toISOString() : null,
+          sku_removed_at: null,
           raw_payload: { lineItemId: line.lineItemId, legacyItemId: line.legacyItemId } };
         await db("marketplace_orders?on_conflict=marketplace,marketplace_order_id,listing_id", {
           method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(row),
         });
-        for (const location of pulled) await db(`physical_skus?id=eq.${location.id}`, { method: "DELETE" });
+        for (const location of pulled) await db(`physical_skus?id=eq.${location.id}`, {
+          method: "PATCH", body: JSON.stringify({ status: "allocated", source_order_id: String(order.orderId), updated_at: new Date().toISOString() }),
+        });
         importedOrders += 1;
       }
-      // Remove cards that no longer exist as active eBay listings. Order location snapshots remain.
-      await db("marketplace_listings?ebay_status=eq.inactive", { method: "DELETE" });
+
+      // Allocated SKUs remain in Supabase until the user explicitly confirms
+      // shipment from the Orders page.
     } catch (orderError) {
       return NextResponse.json({ ok: true, listings: listings.length, orders: 0, warning: `Listings imported. Orders could not be imported: ${orderError instanceof Error ? orderError.message : "unknown error"}` });
     }

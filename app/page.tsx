@@ -281,7 +281,7 @@ export default function Home() {
               loading={loading}
             />
           )}{" "}
-          {view === "orders" && <Orders rows={orders} loading={loading} />}{" "}
+          {view === "orders" && <Orders rows={orders} loading={loading} reload={loadOrders} notify={setMessage} />}{" "}
           {view === "duplicates" && (
             <Duplicates
               groups={duplicateGroups}
@@ -587,12 +587,28 @@ function Inventory({
     </div>
   );
 }
-function Orders({ rows, loading }: { rows: any[]; loading: boolean }) {
+function Orders({ rows, loading, reload, notify }: { rows: any[]; loading: boolean; reload: () => Promise<void>; notify: (message: string) => void }) {
+  const [shipping, setShipping] = useState<string | null>(null);
+  const confirmShipped = async (order: any) => {
+    if (!confirm(`Confirm order #${order.marketplace_order_id} has shipped? This permanently removes its allocated SKU from Supabase.`)) return;
+    setShipping(order.id);
+    try {
+      const response = await fetch("/api/orders", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: order.id }) });
+      const body: any = await response.json();
+      if (!response.ok) throw new Error(body.error || "Shipment confirmation failed");
+      notify(`Order #${order.marketplace_order_id} marked shipped. Allocated SKU removed from Supabase.`);
+      await reload();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Shipment confirmation failed");
+    } finally {
+      setShipping(null);
+    }
+  };
   return (
     <div className="stack">
       <Intro
         title="Orders to fulfill"
-        text="The sold physical SKU has already been removed from active Supabase inventory; its location is preserved here for pulling."
+        text="The displayed SKU is reserved in Supabase for this order. It is removed only after you click Confirm shipped."
         action={<span className="count">Up to 50 order lines</span>}
       />
       {loading ? (
@@ -622,6 +638,9 @@ function Orders({ rows, loading }: { rows: any[]; loading: boolean }) {
                         "No physical location"}
                     </b>
                   </div>
+                  <button className="primary wide" disabled={shipping === o.id} onClick={() => confirmShipped(o)}>
+                    <PackageCheck /> {shipping === o.id ? "Confirming…" : "Confirm shipped"}
+                  </button>
                 </article>
               );
             })}

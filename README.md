@@ -1,6 +1,6 @@
 # Swivels Inventory
 
-## Current package — v1.6.1
+## Current package — v1.7.1
 
 This is the real-data Render application with built-in eBay OAuth. The app gets
 and stores the long-lived eBay refresh token after you click **Connect eBay**.
@@ -22,6 +22,10 @@ browser confirmation.
   listing's quantity and save each physical SKU in Supabase.
 - New repeated copies become one eBay listing row with combined quantity while
   every physical SKU is retained for order pulling.
+- When an order is imported, the surviving listing's primary SKU is allocated
+  first; later sales use the next available physical SKU.
+- An allocated SKU stays in Supabase until **Confirm shipped** is clicked on
+  the Orders page. That confirmation permanently removes only that order's SKU.
 
 ### Low-egress design
 

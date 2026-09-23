@@ -186,3 +186,14 @@ export async function getOpenOrders(token: string) {
   }
   return orders;
 }
+
+export async function getOrder(token: string, orderId: string) {
+  if (!orderId || orderId.length > 100) throw new Error("Invalid eBay order ID");
+  const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order/${encodeURIComponent(orderId)}`, {
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
+  });
+  const body: any = await response.json();
+  if (!response.ok) throw new Error(`eBay order ${orderId} request failed: ${body.errors?.[0]?.message || response.status}`);
+  return body;
+}
