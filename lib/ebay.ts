@@ -99,6 +99,9 @@ const specificMap = (item: any) => {
 };
 
 async function getMagicSinglesStoreCategoryIds(token: string) {
+  // Swivels Card Shop's exact eBay Store category. Keeping this explicit prevents
+  // the Magic parent category (and its sealed-products child) from being synced.
+  const matches = new Set<string>(["45236711016"]);
   const xml = `<?xml version="1.0" encoding="utf-8"?><GetStoreRequest xmlns="urn:ebay:apis:eBLBaseComponents"><CategoryStructureOnly>true</CategoryStructureOnly></GetStoreRequest>`;
   const response = await fetch("https://api.ebay.com/ws/api.dll", {
     method: "POST", cache: "no-store",
@@ -109,10 +112,9 @@ async function getMagicSinglesStoreCategoryIds(token: string) {
     }, body: xml,
   });
   const text = await response.text();
-  if (!response.ok) return new Set<string>();
+  if (!response.ok) return matches;
   const parsed: any = new XMLParser({ ignoreAttributes: false, parseTagValue: true }).parse(text)?.GetStoreResponse;
-  if (!["Success", "Warning"].includes(parsed?.Ack)) return new Set<string>();
-  const matches = new Set<string>();
+  if (!["Success", "Warning"].includes(parsed?.Ack)) return matches;
   const visit = (category: any) => {
     if (!category) return;
     const name = String(category.Name || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
