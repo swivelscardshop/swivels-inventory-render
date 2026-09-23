@@ -74,6 +74,7 @@ export type EbayListing = {
   last_ebay_sync_at: string; updated_at: string;
   card_name: string | null; card_number: string | null; finish: string | null;
   language: string | null; condition_name: string | null; parallel_variety: string | null; match_key: string | null;
+  started_at: string | null;
 };
 
 const specificMap = (item: any) => {
@@ -130,6 +131,7 @@ export async function getActiveListings(token: string) {
         price: Number(item.SellingStatus?.CurrentPrice?.["#text"] ?? item.SellingStatus?.CurrentPrice ?? 0),
         ebay_quantity: quantity, ebay_status: "active", image_url: item.PictureDetails?.GalleryURL || null,
         last_ebay_sync_at: now, updated_at: now,
+        started_at: item.ListingDetails?.StartTime ? String(item.ListingDetails.StartTime) : null,
       });
     }
     const totalPages = Number(parsed.ActiveList?.PaginationResult?.TotalNumberOfPages || 1);

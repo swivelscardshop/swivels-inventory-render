@@ -1,6 +1,6 @@
 # Swivels Inventory
 
-## Current package — v1.5.5
+## Current package — v1.6.1
 
 This is the real-data Render application with built-in eBay OAuth. The app gets
 and stores the long-lived eBay refresh token after you click **Connect eBay**.
@@ -12,7 +12,7 @@ browser confirmation.
 
 ### Duplicate and CSV workflow
 
-- Duplicate Center uses a normalized Card Uploader title and reads NM, LP, MP,
+- Duplicate Center scans live active eBay listings directly, uses a normalized Card Uploader title, and reads NM, LP, MP,
   HP, or DMG from either eBay's condition field or the listing title. This works
   even when eBay omits Item Specifics and condition from its bulk response.
 - NM, LP, MP, HP, and DMG copies of the same card are separate valid listings.

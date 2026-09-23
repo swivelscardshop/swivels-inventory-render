@@ -1,96 +1,95 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/supabase";
-import { endListing, reviseListingQuantity } from "@/lib/ebay";
+import { accessToken, endListing, getActiveListings, reviseListingQuantity } from "@/lib/ebay";
 import { cardMatchKey } from "@/lib/matching";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+const numericId = (value: unknown) => typeof value === "string" && /^\d+$/.test(value);
+
 export async function GET() {
   try {
-    const rows = await db(
-      "marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,set_name,card_number,finish,language,condition_name,parallel_variety,price,ebay_quantity&ebay_status=eq.active&order=title.asc&limit=10000",
-    );
+    const token = await accessToken();
+    const listings = await getActiveListings(token);
     const map = new Map<string, any[]>();
     let comparable = 0;
-    for (const row of rows || []) {
-      const matchKey = cardMatchKey({ title: row.title, condition: row.condition_name });
+    for (const listing of listings) {
+      const matchKey = cardMatchKey({ title: listing.title, condition: listing.condition_name });
       if (!matchKey) continue;
       comparable += 1;
       const detectedCondition = matchKey.split("|").at(-1);
-      map.set(matchKey, [...(map.get(matchKey) || []), { ...row, detected_condition: detectedCondition }]);
+      map.set(matchKey, [...(map.get(matchKey) || []), { ...listing, detected_condition: detectedCondition }]);
     }
     const groups = [...map.entries()]
-      .filter(([, listings]) => listings.length > 1)
-      .map(([matchKey, listings]) => ({ matchKey, listings }));
-    return NextResponse.json({ groups, scanned: rows?.length || 0, comparable });
+      .filter(([, rows]) => rows.length > 1)
+      .map(([matchKey, rows]) => ({
+        matchKey,
+        listings: [...rows].sort((a, b) => {
+          const aTime = a.started_at ? Date.parse(a.started_at) : 0;
+          const bTime = b.started_at ? Date.parse(b.started_at) : 0;
+          return bTime - aTime || Number(b.ebay_listing_id) - Number(a.ebay_listing_id);
+        }),
+      }));
+    return NextResponse.json({ groups, scanned: listings.length, comparable, source: "ebay-live" });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : "Duplicate scan failed",
-      },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Live eBay duplicate scan failed" }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const { matchKey, survivorId, listingIds }: any = await request.json();
-    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    const ids = Array.isArray(listingIds) ? [...new Set(listingIds)].filter((x): x is string => typeof x === "string" && uuid.test(x)).slice(0, 20) : [];
-    if (!uuid.test(String(survivorId)) || ids.length < 2 || !ids.includes(survivorId))
-      throw new Error("Duplicate selection could not be verified");
-    const group = await db(
-      `marketplace_listings?select=id,ebay_listing_id,ebay_quantity,title,condition_name&ebay_status=eq.active&id=in.(${ids.join(",")})`,
-    );
-    if (!group || group.length < 2)
-      throw new Error("This duplicate group no longer exists");
-    if (group.some((row: any) => cardMatchKey({ title: row.title, condition: row.condition_name }) !== matchKey))
-      throw new Error("The selected listings are no longer an exact title-and-condition match");
-    const survivor = group.find((x: any) => x.id === survivorId);
-    if (!survivor) throw new Error("Selected survivor could not be verified");
-    const duplicates = group.filter((x: any) => x.id !== survivor.id);
-    const totalQuantity = group.reduce(
-      (sum: number, x: any) => sum + Number(x.ebay_quantity || 0),
-      0,
-    );
-    await reviseListingQuantity(
-      String(survivor.ebay_listing_id),
-      totalQuantity,
-    );
-    for (const duplicate of duplicates)
-      await endListing(String(duplicate.ebay_listing_id));
-    for (const duplicate of duplicates)
+    const { matchKey, survivorEbayId, listingEbayIds }: any = await request.json();
+    const ids = Array.isArray(listingEbayIds)
+      ? ([...new Set(listingEbayIds)].filter(numericId).slice(0, 20) as string[])
+      : [];
+    if (!numericId(survivorEbayId) || ids.length < 2 || !ids.includes(survivorEbayId))
+      throw new Error("Duplicate eBay selection could not be verified");
+
+    const token = await accessToken();
+    const live = await getActiveListings(token);
+    const group = live.filter((x) => ids.includes(x.ebay_listing_id));
+    if (group.length !== ids.length)
+      throw new Error("One or more selected eBay listings are no longer active. Scan again.");
+    if (group.some((row) => cardMatchKey({ title: row.title, condition: row.condition_name }) !== matchKey))
+      throw new Error("The selected eBay listings are no longer an exact title-and-condition match");
+    const survivor = group.find((x) => x.ebay_listing_id === survivorEbayId);
+    if (!survivor) throw new Error("Selected eBay survivor could not be verified");
+    const newest = [...group].sort((a, b) => {
+      const aTime = a.started_at ? Date.parse(a.started_at) : 0;
+      const bTime = b.started_at ? Date.parse(b.started_at) : 0;
+      return bTime - aTime || Number(b.ebay_listing_id) - Number(a.ebay_listing_id);
+    })[0];
+    if (newest.ebay_listing_id !== survivorEbayId)
+      throw new Error("For safety, duplicates can only be combined into the newest active eBay listing");
+    const duplicates = group.filter((x) => x.ebay_listing_id !== survivorEbayId);
+    const totalQuantity = group.reduce((sum, x) => sum + Number(x.ebay_quantity || 0), 0);
+
+    await reviseListingQuantity(survivorEbayId, totalQuantity);
+    for (const duplicate of duplicates) await endListing(duplicate.ebay_listing_id);
+
+    const records = await db(`marketplace_listings?select=id,ebay_listing_id&ebay_listing_id=in.(${ids.join(",")})`);
+    const survivorRecord = records?.find((x: any) => String(x.ebay_listing_id) === survivorEbayId);
+    if (!survivorRecord)
+      throw new Error("eBay was updated, but the survivor is missing from Supabase. Run Import from eBay now.");
+    const duplicateRecords = (records || []).filter((x: any) => String(x.ebay_listing_id) !== survivorEbayId);
+    for (const duplicate of duplicateRecords) {
       await db(`physical_skus?listing_id=eq.${duplicate.id}`, {
         method: "PATCH",
         headers: { Prefer: "return=minimal" },
-        body: JSON.stringify({
-          listing_id: survivor.id,
-          updated_at: new Date().toISOString(),
-        }),
+        body: JSON.stringify({ listing_id: survivorRecord.id, updated_at: new Date().toISOString() }),
       });
-    await db(`marketplace_listings?id=eq.${survivor.id}`, {
+    }
+    await db(`marketplace_listings?id=eq.${survivorRecord.id}`, {
       method: "PATCH",
       headers: { Prefer: "return=minimal" },
-      body: JSON.stringify({
-        ebay_quantity: totalQuantity,
-        updated_at: new Date().toISOString(),
-      }),
+      body: JSON.stringify({ ebay_quantity: totalQuantity, updated_at: new Date().toISOString() }),
     });
-    for (const duplicate of duplicates)
-      await db(`marketplace_listings?id=eq.${duplicate.id}`, {
-        method: "DELETE",
-      });
-    return NextResponse.json({
-      ok: true,
-      ended: duplicates.length,
-      quantity: totalQuantity,
-    });
+    for (const duplicate of duplicateRecords)
+      await db(`marketplace_listings?id=eq.${duplicate.id}`, { method: "DELETE" });
+
+    return NextResponse.json({ ok: true, ended: duplicates.length, quantity: totalQuantity });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Combine failed" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Combine failed" }, { status: 400 });
   }
 }

@@ -26,6 +26,21 @@ export async function db(path: string, init: RequestInit = {}) {
   return text ? JSON.parse(text) : null;
 }
 
+export async function dbAll(path: string, pageSize = 1000) {
+  const rows: any[] = [];
+  let offset = 0;
+  while (true) {
+    const separator = path.includes("?") ? "&" : "?";
+    const page = await db(`${path}${separator}limit=${pageSize}&offset=${offset}`);
+    const batch = Array.isArray(page) ? page : [];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+    offset += batch.length;
+    if (offset >= 50000) throw new Error("Stopped after 50,000 Supabase records for safety");
+  }
+  return rows;
+}
+
 export async function count(table: string, filter = "") {
   if (!supabaseConfigured()) return 0;
   const response = await fetch(`${url()}/rest/v1/${table}?select=id${filter}`, {

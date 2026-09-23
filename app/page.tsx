@@ -645,10 +645,10 @@ function Duplicates({
   reload: () => Promise<void>;
   setMessage: (v: string) => void;
 }) {
-  const combine = async (group: any, survivorId: string) => {
+  const combine = async (group: any, survivorEbayId: string) => {
     if (
       !confirm(
-        `Combine ${group.listings.length} live eBay listings? The selected listing stays active, quantities are combined, and the others are ended.`,
+        `Combine ${group.listings.length} live eBay listings into the newest listing? Its quantity will increase, all older listings will end, and every location SKU will be kept in Supabase.`,
       )
     )
       return;
@@ -658,8 +658,8 @@ function Duplicates({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           matchKey: group.matchKey,
-          survivorId,
-          listingIds: group.listings.map((x: any) => x.id),
+          survivorEbayId,
+          listingEbayIds: group.listings.map((x: any) => x.ebay_listing_id),
         }),
       });
       const b: any = await r.json();
@@ -689,7 +689,7 @@ function Duplicates({
               t={g.listings[0]?.title || "Duplicate card"}
             />
             {g.listings.map((x: any, i: number) => (
-              <div className="duprow" key={x.id}>
+              <div className="duprow" key={x.ebay_listing_id}>
                 <div>
                   <b>{x.title}</b>
                   <small>
@@ -698,13 +698,12 @@ function Duplicates({
                     <strong>{x.condition_name || x.detected_condition || "Condition missing"}</strong>
                   </small>
                   <small>
-                    eBay #{x.ebay_listing_id} · SKU {x.ebay_sku || "—"} · Qty{" "}
+                    {i === 0 ? "NEWEST · " : "OLDER · "}eBay #{x.ebay_listing_id} · SKU {x.ebay_sku || "—"} · Qty{" "}
                     {x.ebay_quantity} · ${Number(x.price || 0).toFixed(2)}
+                    {x.started_at ? ` · Listed ${new Date(x.started_at).toLocaleDateString()}` : ""}
                   </small>
                 </div>
-                <button className="secondary" onClick={() => combine(g, x.id)}>
-                  {i === 0 ? "Keep this listing" : "Keep this instead"}
-                </button>
+                {i === 0 && <button className="primary" onClick={() => combine(g, x.ebay_listing_id)}>Combine into newest</button>}
               </div>
             ))}
           </section>

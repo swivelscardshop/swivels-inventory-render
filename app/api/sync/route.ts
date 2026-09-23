@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { accessToken, getActiveListings, getOpenOrders } from "@/lib/ebay";
-import { db } from "@/lib/supabase";
+import { db, dbAll } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -20,8 +20,9 @@ export async function POST() {
     // The normal import is read-only against eBay and refreshes the Supabase catalog.
     await db("marketplace_listings?ebay_status=eq.active", { method: "PATCH", body: JSON.stringify({ ebay_status: "inactive", updated_at: new Date().toISOString() }) });
     for (const group of chunks(listings)) {
+      const databaseRows = group.map(({ started_at: _startedAt, ...listing }) => listing);
       await db("marketplace_listings?on_conflict=ebay_listing_id", {
-        method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(group),
+        method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(databaseRows),
       });
     }
 
@@ -47,7 +48,7 @@ export async function POST() {
     // Attach every physical SKU from a CSV batch once its new eBay listing exists.
     const keyToIds = new Map<string, string[]>();
     for (const row of stored) if (row.match_key) keyToIds.set(row.match_key, [...(keyToIds.get(row.match_key) || []), row.id]);
-    const pending = await db("pending_skus?select=id,match_key,sku,location_label&limit=5000");
+    const pending = await dbAll("pending_skus?select=id,match_key,sku,location_label&order=id.asc");
     const attached: any[] = [], attachedIds: string[] = [];
     for (const row of pending || []) {
       const matches = keyToIds.get(row.match_key) || [];

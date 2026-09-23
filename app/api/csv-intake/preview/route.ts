@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { parse } from "csv-parse/sync";
 import { stringify } from "csv-stringify/sync";
 import { csvIdentity, cardMatchKey } from "@/lib/matching";
-import { db } from "@/lib/supabase";
+import { dbAll } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const required = ["*Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)", "*Title", "CustomLabel", "*Quantity", "*C:Set", "*C:Card Name", "*C:Card Number"];
     for (const name of required) if (!headers.includes(name)) throw new Error(`CSV is missing required column: ${name}`);
     const rows = parse(text, { bom: true, columns: true, skip_empty_lines: true, relax_quotes: true }) as Record<string, string>[];
-    const listings = await db("marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,ebay_quantity,price,match_key&ebay_status=eq.active&match_key=not.is.null&limit=10000");
+    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,ebay_quantity,price,match_key&ebay_status=eq.active&match_key=not.is.null&order=id.asc");
     const existingByKey = new Map<string, any[]>();
     for (const listing of listings || []) if (listing.match_key) existingByKey.set(listing.match_key, [...(existingByKey.get(listing.match_key) || []), listing]);
 
