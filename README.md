@@ -1,13 +1,26 @@
 # Swivels Inventory
 
-## Current package — v1.4.0
+## Current package — v1.5.0
 
 This is the real-data Render application with built-in eBay OAuth. The app gets
 and stores the long-lived eBay refresh token after you click **Connect eBay**.
 You no longer need to copy a short-lived access token into Render.
 
-The import is one-way and read-only: it reads active listings and open orders
-from eBay and stores them in Supabase. It never revises or ends an eBay listing.
+The normal import is one-way and read-only. Duplicate Center and CSV Intake can
+change live eBay quantities or end confirmed duplicates only after a review and
+browser confirmation.
+
+### Duplicate and CSV workflow
+
+- Duplicate Center scans active listings by game, set, card name, card number,
+  finish, language, condition, and parallel/variety.
+- NM, LP, MP, HP, and DMG copies of the same card are separate valid listings.
+- CSV Intake accepts the Card Uploader eBay CSV layout and generates a CSV with
+  the same ordered columns containing only genuinely new unique listings.
+- Incoming copies that already have one matching eBay listing increase that
+  listing's quantity and save each physical SKU in Supabase.
+- New repeated copies become one eBay listing row with combined quantity while
+  every physical SKU is retained for order pulling.
 
 ### Low-egress design
 
@@ -19,11 +32,12 @@ from eBay and stores them in Supabase. It never revises or ends an eBay listing.
   50 currently actionable order lines.
 - Changing dashboard views does not repeatedly download the full catalog.
 
-## Upgrade an existing v1.2.0 deployment
+## Upgrade an existing deployment
 
 1. Replace the files in your GitHub repository with this package and commit.
-2. In Supabase, open SQL Editor and run `supabase/oauth-migration.sql` once.
-   This adds only the secure token table and does not delete existing data.
+2. In Supabase, open SQL Editor and run `supabase/v1.5.0-migration.sql` once.
+   This adds duplicate-matching, pending-SKU, and order-location fields without
+   deleting existing inventory.
 3. Wait for Render to redeploy.
 
 Do not rerun `supabase/schema.sql` on an existing database because that file is

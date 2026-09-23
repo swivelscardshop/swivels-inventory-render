@@ -13,6 +13,7 @@ drop view if exists listing_reconciliation;
 drop table if exists order_allocations cascade;
 drop table if exists marketplace_orders cascade;
 drop table if exists reconciliation_issues cascade;
+drop table if exists pending_skus cascade;
 drop table if exists sync_events cascade;
 drop table if exists physical_skus cascade;
 drop table if exists marketplace_listings cascade;
@@ -24,6 +25,13 @@ create table marketplace_listings (
   title text not null,
   game text not null check (game in ('pokemon','magic','other')),
   set_name text,
+  card_name text,
+  card_number text,
+  finish text,
+  language text,
+  condition_name text,
+  parallel_variety text,
+  match_key text,
   price numeric(12,2),
   ebay_quantity integer not null default 0 check (ebay_quantity >= 0),
   ebay_status text not null default 'active',
@@ -50,13 +58,26 @@ create table marketplace_orders (
   id uuid primary key default gen_random_uuid(),
   marketplace text not null check (marketplace = 'ebay'),
   marketplace_order_id text not null,
-  listing_id uuid references marketplace_listings(id),
+  listing_id uuid references marketplace_listings(id) on delete set null,
   quantity integer not null check (quantity > 0),
   fulfillment_status text not null default 'unfulfilled',
   refunded boolean not null default false,
   ordered_at timestamptz not null,
   raw_payload jsonb,
+  order_title text,
+  pull_sku text,
+  pull_location text,
+  sku_removed_at timestamptz,
   unique (marketplace, marketplace_order_id, listing_id)
+);
+
+create table pending_skus (
+  id uuid primary key default gen_random_uuid(),
+  match_key text not null,
+  sku text not null unique,
+  location_label text not null,
+  source text not null default 'csv_intake',
+  created_at timestamptz not null default now()
 );
 
 create table order_allocations (
@@ -97,6 +118,8 @@ create table reconciliation_issues (
 create index physical_skus_listing_status_idx on physical_skus(listing_id,status);
 create index marketplace_orders_fulfillment_idx on marketplace_orders(fulfillment_status,refunded);
 create index reconciliation_issues_status_idx on reconciliation_issues(status);
+create index marketplace_listings_match_key_idx on marketplace_listings(match_key) where ebay_status = 'active';
+create index pending_skus_match_key_idx on pending_skus(match_key);
 
 create view listing_reconciliation as
 select l.id, l.ebay_listing_id, l.title, l.ebay_quantity,
@@ -112,4 +135,5 @@ alter table marketplace_orders enable row level security;
 alter table order_allocations enable row level security;
 alter table sync_events enable row level security;
 alter table reconciliation_issues enable row level security;
+alter table pending_skus enable row level security;
 alter table app_secrets enable row level security;

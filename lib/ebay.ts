@@ -1,5 +1,6 @@
 import { XMLParser } from "fast-xml-parser";
 import { db } from "@/lib/supabase";
+import { cardMatchKey } from "@/lib/matching";
 
 const clientId = () => process.env.EBAY_CLIENT_ID || "";
 const clientSecret = () => process.env.EBAY_CLIENT_SECRET || "";
@@ -71,6 +72,17 @@ export type EbayListing = {
   ebay_listing_id: string; ebay_sku: string | null; title: string; game: "pokemon" | "magic" | "other";
   set_name: string | null; price: number; ebay_quantity: number; ebay_status: "active"; image_url: string | null;
   last_ebay_sync_at: string; updated_at: string;
+  card_name: string | null; card_number: string | null; finish: string | null;
+  language: string | null; condition_name: string | null; parallel_variety: string | null; match_key: string | null;
+};
+
+const specificMap = (item: any) => {
+  const map = new Map<string, string>();
+  for (const row of arr<any>(item.ItemSpecifics?.NameValueList)) {
+    const value = arr<any>(row.Value).map(String).join(", ");
+    map.set(String(row.Name || "").toLowerCase(), value);
+  }
+  return map;
 };
 
 export async function getActiveListings(token: string) {
@@ -99,11 +111,23 @@ export async function getActiveListings(token: string) {
     for (const item of items) {
       const title = String(item.Title || "Untitled listing");
       const lower = title.toLowerCase();
+      const specifics = specificMap(item);
       const quantity = Math.max(0, Number(item.Quantity || 0) - Number(item.SellingStatus?.QuantitySold || 0));
+      const identity = {
+        title, game: specifics.get("game") || (lower.includes("magic") || lower.includes("mtg") ? "Magic" : "Pokémon TCG"),
+        setName: specifics.get("set") || null, cardName: specifics.get("card name") || null,
+        cardNumber: specifics.get("card number") || null, finish: specifics.get("finish") || null,
+        language: specifics.get("language") || null,
+        condition: specifics.get("card condition") || item.ConditionDisplayName || null,
+        parallel: specifics.get("parallel/variety") || null,
+      };
       results.push({
         ebay_listing_id: String(item.ItemID), ebay_sku: item.SKU ? String(item.SKU) : null, title,
         game: lower.includes("magic") || lower.includes("mtg") ? "magic" : lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other",
-        set_name: null, price: Number(item.SellingStatus?.CurrentPrice?.["#text"] ?? item.SellingStatus?.CurrentPrice ?? 0),
+        set_name: identity.setName, card_name: identity.cardName, card_number: identity.cardNumber,
+        finish: identity.finish, language: identity.language, condition_name: identity.condition,
+        parallel_variety: identity.parallel, match_key: cardMatchKey(identity) || null,
+        price: Number(item.SellingStatus?.CurrentPrice?.["#text"] ?? item.SellingStatus?.CurrentPrice ?? 0),
         ebay_quantity: quantity, ebay_status: "active", image_url: item.PictureDetails?.GalleryURL || null,
         last_ebay_sync_at: now, updated_at: now,
       });
@@ -114,6 +138,34 @@ export async function getActiveListings(token: string) {
     if (page > 100) throw new Error("Stopped after 20,000 listings for safety");
   }
   return results;
+}
+
+const xmlEscape = (value: string | number) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+
+async function tradingCall(callName: string, xml: string) {
+  const token = await accessToken();
+  const response = await fetch("https://api.ebay.com/ws/api.dll", {
+    method: "POST", cache: "no-store",
+    headers: { "X-EBAY-API-CALL-NAME": callName, "X-EBAY-API-SITEID": "0", "X-EBAY-API-COMPATIBILITY-LEVEL": "1423", "X-EBAY-API-IAF-TOKEN": token, "Content-Type": "text/xml" },
+    body: xml,
+  });
+  const text = await response.text();
+  if (!response.ok || !/<Ack>(Success|Warning)<\/Ack>/.test(text)) {
+    const parsed: any = new XMLParser({ ignoreAttributes: false }).parse(text);
+    const root = parsed?.[`${callName}Response`];
+    const message = arr<any>(root?.Errors).map(x => x.LongMessage || x.ShortMessage).filter(Boolean).join("; ");
+    throw new Error(message || `eBay ${callName} failed (${response.status})`);
+  }
+}
+
+export async function reviseListingQuantity(itemId: string, quantity: number) {
+  if (!/^\d+$/.test(itemId) || !Number.isInteger(quantity) || quantity < 0) throw new Error("Invalid eBay quantity update");
+  return tradingCall("ReviseInventoryStatus", `<?xml version="1.0" encoding="utf-8"?><ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents"><InventoryStatus><ItemID>${xmlEscape(itemId)}</ItemID><Quantity>${quantity}</Quantity></InventoryStatus></ReviseInventoryStatusRequest>`);
+}
+
+export async function endListing(itemId: string) {
+  if (!/^\d+$/.test(itemId)) throw new Error("Invalid eBay listing ID");
+  return tradingCall("EndFixedPriceItem", `<?xml version="1.0" encoding="utf-8"?><EndFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${xmlEscape(itemId)}</ItemID><EndingReason>NotAvailable</EndingReason></EndFixedPriceItemRequest>`);
 }
 
 export async function getOpenOrders(token: string) {
