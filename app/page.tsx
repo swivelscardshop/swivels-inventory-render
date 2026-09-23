@@ -696,7 +696,8 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
           <div className="ordergrid">
             {displayedOrders.map((o) => {
               const l = o.marketplace_listings;
-              const image = l?.image_url || o.raw_payload?.image_url;
+              const legacyItemId = o.raw_payload?.legacyItemId;
+              const image = legacyItemId ? `/api/ebay/image?itemId=${encodeURIComponent(String(legacyItemId))}` : (l?.image_url || o.raw_payload?.image_url);
               const total = o.marketplace === "manapool"
                 ? (o.raw_payload?.mana_pool_order?.total_cents ?? o.raw_payload?.total_cents)
                 : o.raw_payload?.orderTotal;

@@ -129,7 +129,7 @@ export async function getActiveListings(token: string) {
       const categoryId = String(item.PrimaryCategory?.CategoryID || "");
       const isIndividualCard = categoryId === "183454";
       const game: EbayListing["game"] = gameSpecific
-        ? (gameSpecific.includes("magic") || gameSpecific === "mtg" ? "magic" : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") ? "pokemon" : "other")
+        ? (isIndividualCard && (gameSpecific.includes("magic") || gameSpecific === "mtg") ? "magic" : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") ? "pokemon" : "other")
         : (isIndividualCard && (lower.includes("magic: the gathering") || /\bmtg\b/.test(lower)) ? "magic" : lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other");
       const quantity = Math.max(0, Number(item.Quantity || 0) - Number(item.SellingStatus?.QuantitySold || 0));
       const identity = {
@@ -214,4 +214,26 @@ export async function getOrder(token: string, orderId: string) {
   const body: any = await response.json();
   if (!response.ok) throw new Error(`eBay order ${orderId} request failed: ${body.errors?.[0]?.message || response.status}`);
   return body;
+}
+
+export async function getListingImage(itemId: string) {
+  if (!/^\d+$/.test(itemId)) throw new Error("Invalid eBay listing ID");
+  const token = await accessToken();
+  const xml = `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${xmlEscape(itemId)}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>false</IncludeItemSpecifics></GetItemRequest>`;
+  const response = await fetch("https://api.ebay.com/ws/api.dll", {
+    method: "POST", cache: "no-store",
+    headers: {
+      "X-EBAY-API-CALL-NAME": "GetItem", "X-EBAY-API-SITEID": "0",
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1423", "X-EBAY-API-IAF-TOKEN": token,
+      "Content-Type": "text/xml",
+    }, body: xml,
+  });
+  const text = await response.text();
+  const parsed: any = new XMLParser({ ignoreAttributes: false, parseTagValue: true }).parse(text)?.GetItemResponse;
+  if (!response.ok || !["Success", "Warning"].includes(parsed?.Ack)) throw new Error("Could not load the eBay listing image");
+  const image = bestEbayImage(parsed?.Item);
+  if (!image) throw new Error("This eBay listing has no image");
+  const host = new URL(image).hostname.toLowerCase();
+  if (host !== "i.ebayimg.com" && !host.endsWith(".ebayimg.com")) throw new Error("Unexpected eBay image host");
+  return image;
 }
