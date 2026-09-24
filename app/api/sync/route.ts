@@ -90,8 +90,13 @@ export async function POST() {
     let completedOrders = 0;
     try {
       const fetchedOrders = await getOpenOrders(token);
-      const orders = fetchedOrders.filter((order: any) => String(order.orderFulfillmentStatus || "").toUpperCase() === "NOT_STARTED");
-      const legacyIds = [...new Set(orders.flatMap((order: any) => (order.lineItems || []).map((line: any) => String(line.legacyItemId || ""))).filter(Boolean))];
+      const orders = fetchedOrders.filter((order: any) => ["NOT_STARTED", "IN_PROGRESS"].includes(String(order.orderFulfillmentStatus || "").toUpperCase()));
+      const openLines = (order:any) => (order.lineItems || []).filter((line:any) => {
+        const lineStatus = String(line.lineItemFulfillmentStatus || "").toUpperCase();
+        const orderStatus = String(order.orderFulfillmentStatus || "").toUpperCase();
+        return orderStatus === "NOT_STARTED" || !lineStatus || lineStatus === "NOT_STARTED";
+      });
+      const legacyIds = [...new Set(orders.flatMap((order: any) => openLines(order).map((line: any) => String(line.legacyItemId || ""))).filter(Boolean))];
       const orderListings: any[] = [];
       for (const group of chunks(legacyIds, 150)) orderListings.push(...await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url&ebay_listing_id=in.(${group.join(",")})`));
       const orderListingMap = new Map(orderListings.map(x => [String(x.ebay_listing_id), x]));
@@ -99,7 +104,7 @@ export async function POST() {
       const existing: any[] = [];
       for (const group of chunks(orderIds, 100)) existing.push(...await db(`marketplace_orders?select=id,marketplace_order_id,listing_id&marketplace_order_id=in.(${group.join(",")})`));
       const existingMap = new Map(existing.map(x => [`${x.marketplace_order_id}|${x.listing_id}`, x]));
-      for (const order of orders) for (const line of order.lineItems || []) {
+      for (const order of orders) for (const line of openLines(order)) {
         const listing = orderListingMap.get(String(line.legacyItemId || ""));
         if (!listing) continue;
         const rawPayload = {
@@ -139,7 +144,7 @@ export async function POST() {
 
       // Reconcile orders that were shipped or canceled directly on eBay after
       // they had already been allocated in this app.
-      const openOrderIds = new Set(orders.map((order: any) => String(order.orderId)));
+      const openOrderIds = new Set(orders.filter((order:any) => openLines(order).length).map((order: any) => String(order.orderId)));
       const pendingEbayOrders = await dbAll("marketplace_orders?select=id,marketplace_order_id,listing_id,fulfillment_status&marketplace=eq.ebay&fulfillment_status=eq.unfulfilled&refunded=eq.false");
       const staleOrderIds = [...new Set((pendingEbayOrders || []).map((row: any) => String(row.marketplace_order_id)).filter((id: string) => !openOrderIds.has(id)))];
       for (const orderId of staleOrderIds) {

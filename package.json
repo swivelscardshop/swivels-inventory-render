@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.10.8",
+  "version": "1.10.10",
   "private": true,
   "engines": {
     "node": "22.x"

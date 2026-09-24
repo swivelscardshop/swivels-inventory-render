@@ -12,7 +12,8 @@ async function overview() {
     mapped: mapped.filter((x:any) => x.scryfall_id).length,
     unmapped: mapped.filter((x:any) => !x.scryfall_id).length,
     review: mapped.filter((x:any) => x.manapool_mapping_status === "review").slice(0, 30),
-    queued: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status !== "review").length,
+    queued: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status === "pending").length,
+    unmatched: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status === "unmatched").length,
   };
 }
 
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
     const body:any = await request.json().catch(() => ({}));
     const mode = body?.mode || "preview";
     if (mode === "map") {
-      const pending = await dbAll("marketplace_listings?select=id,title,card_name,card_number,set_name,language,finish,condition_name&game=eq.magic&ebay_status=eq.active&scryfall_id=is.null&manapool_mapping_status=neq.review&order=title.asc", 40);
+      const pending = await dbAll("marketplace_listings?select=id,title,card_name,card_number,set_name,language,finish,condition_name&game=eq.magic&ebay_status=eq.active&scryfall_id=is.null&manapool_mapping_status=eq.pending&order=title.asc", 40);
       let matched = 0, review = 0, unmatched = 0, failed = 0;
       for (const row of pending.slice(0, 40)) {
         try {
