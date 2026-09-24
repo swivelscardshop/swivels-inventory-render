@@ -759,6 +759,23 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
   const orders = async () => {
     setWorking(true); try { const r=await fetch("/api/manapool",{method:"PATCH"}); const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Order import failed"); notify(`Imported ${b.orders} Mana Pool orders and ${b.lines} order lines.`); } catch(e){notify(e instanceof Error?e.message:"Order import failed");} finally{setWorking(false);}
   };
+  const mapNext = async () => {
+    setWorking(true);
+    try {
+      const r=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"map"})});
+      const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Magic mapping failed");
+      notify(`Checked ${b.processed} cards: ${b.matched} mapped, ${b.review} need review, ${b.unmatched} unmatched.`);
+      window.setTimeout(()=>window.location.reload(),900);
+    } catch(e){notify(e instanceof Error?e.message:"Magic mapping failed");} finally{setWorking(false);}
+  };
+  const confirmMap = async (listing:any,candidate:any) => {
+    setWorking(true);
+    try {
+      const r=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"confirm-map",id:listing.id,scryfall_id:candidate.id})});
+      const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Mapping confirmation failed");
+      notify(`Mapped ${listing.title} to ${candidate.name}.`); window.setTimeout(()=>window.location.reload(),700);
+    } catch(e){notify(e instanceof Error?e.message:"Mapping confirmation failed");} finally{setWorking(false);}
+  };
   return <div className="stack">
     <Intro title="Mana Pool connection" text="Sync active eBay Magic: The Gathering individual-card listings. Sealed packs, boxes, decks, and products remain excluded." action={<span className={data?.configured?"healthy":"count"}>{data?.configured?"Connected":"Token required"}</span>} />
     {loading ? <Empty text="Loading Mana Pool status…"/> : <>
@@ -769,7 +786,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
       </div>
       <section className="panel">
         <Title k="SAFE SYNC" t="Review before live changes" />
-        <p className="bodycopy">Price is the greater of $0.40 or 130% of the stored Mana Pool lowest price. Only listings with a TCGPlayer SKU are sent.</p>
+        <p className="bodycopy">Price is the greater of $0.40 or 130% of the stored Mana Pool lowest price. Only reviewed Scryfall mappings are sent.</p>
         <div className="modal-actions">
           <button className="secondary" disabled={working||!data?.configured} onClick={()=>run("preview")}>Preview changes</button>
           <button className="secondary" disabled={working||!data?.configured} onClick={orders}>Import Mana Pool orders</button>
@@ -777,7 +794,20 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
         </div>
         {preview && <div className="warning"><Check/><div><b>{preview.total} mapped listings in preview</b><p>{preview.enabled?"Live sync is enabled.":"Live sync is still disabled in Render."}</p></div></div>}
       </section>
-      <section className="panel"><Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic singles"/><p className="bodycopy">The next mapping step will match each eBay Magic single to Mana Pool's catalog using card name, set, collector number, condition, finish, and language. Unmatched or sealed listings are never changed.</p></section>
+      <section className="panel">
+        <Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic singles"/>
+        <p className="bodycopy">Match eBay Magic singles through Scryfall, which Mana Pool accepts directly. Each run checks up to 40 cards. Ambiguous matches stay here for your review; nothing is sent to Mana Pool yet.</p>
+        <div className="modal-actions"><button className="primary" disabled={working||!data?.configured||!data?.unmapped} onClick={mapNext}>{working?"Checking cards…":`Map next ${Math.min(40,data?.queued||data?.unmapped||0)} cards`}</button></div>
+        {!!data?.review?.length && <div className="mapping-review">
+          <h3>Matches needing your review</h3>
+          {data.review.map((listing:any)=><article className="mapping-card" key={listing.id}>
+            <div><b>{listing.title}</b><small>Choose the exact printing below</small></div>
+            <div className="mapping-options">{(listing.manapool_mapping_candidates||[]).map((candidate:any)=><button className="secondary" disabled={working} key={candidate.id} onClick={()=>confirmMap(listing,candidate)}>
+              {candidate.image_url&&<img src={candidate.image_url} alt=""/>}<span><b>{candidate.name}</b><small>{candidate.set_name} · #{candidate.collector_number}</small></span>
+            </button>)}</div>
+          </article>)}
+        </div>}
+      </section>
     </>}
   </div>;
 }

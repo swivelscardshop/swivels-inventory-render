@@ -48,9 +48,19 @@ export async function getManaPoolOrder(id: string) {
   return manaPool(`/seller/orders/${encodeURIComponent(id)}`);
 }
 
-export async function setManaPoolInventory(rows: Array<{tcgplayer_sku:number;price_cents:number|null;quantity:number|null;custom_external_id?:string|null}>) {
+export type ManaPoolScryfallInventory = {
+  scryfall_id: string;
+  language_id: string;
+  finish_id: string;
+  condition_id: string;
+  price_cents: number | null;
+  quantity: number | null;
+  custom_external_id?: string | null;
+};
+
+export async function setManaPoolInventory(rows: ManaPoolScryfallInventory[]) {
   if (!manaPoolSyncEnabled()) throw new Error("Mana Pool live sync is disabled. Set MANAPOOL_SYNC_ENABLED=true after reviewing the preview.");
-  return manaPool("/seller/inventory/tcgsku", { method: "POST", body: JSON.stringify(rows) });
+  return manaPool("/seller/inventory/scryfall_id", { method: "POST", body: JSON.stringify(rows) });
 }
 
 export async function fulfillManaPoolOrder(id: string, tracking?: { company?: string; number?: string; url?: string }) {

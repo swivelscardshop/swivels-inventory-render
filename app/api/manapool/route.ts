@@ -1,16 +1,18 @@
 import { NextResponse } from "next/server";
 import { db, dbAll } from "@/lib/supabase";
 import { getManaPoolOrder, getManaPoolOrders, manaPoolConfigured, manaPoolPrice, manaPoolSyncEnabled, setManaPoolInventory } from "@/lib/manapool";
+import { findScryfallCandidates, manaPoolVariant } from "@/lib/scryfall";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 async function overview() {
-  const mapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_quantity,tcgplayer_sku,manapool_price_cents,manapool_quantity&game=eq.magic&ebay_status=eq.active&order=title.asc");
+  const mapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_quantity,scryfall_id,manapool_mapping_status,manapool_mapping_candidates,manapool_price_cents,manapool_quantity&game=eq.magic&ebay_status=eq.active&order=title.asc");
   return {
     configured: manaPoolConfigured(), enabled: manaPoolSyncEnabled(),
-    mapped: mapped.filter((x:any) => x.tcgplayer_sku).length,
-    unmapped: mapped.filter((x:any) => !x.tcgplayer_sku).length,
-    rows: mapped.slice(0, 100),
+    mapped: mapped.filter((x:any) => x.scryfall_id).length,
+    unmapped: mapped.filter((x:any) => !x.scryfall_id).length,
+    review: mapped.filter((x:any) => x.manapool_mapping_status === "review").slice(0, 30),
+    queued: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status !== "review").length,
   };
 }
 
@@ -23,9 +25,36 @@ export async function POST(request: Request) {
   try {
     const body:any = await request.json().catch(() => ({}));
     const mode = body?.mode || "preview";
-    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_quantity,tcgplayer_sku,manapool_lowest_cents&game=eq.magic&ebay_status=eq.active&tcgplayer_sku=not.is.null");
+    if (mode === "map") {
+      const pending = await dbAll("marketplace_listings?select=id,title,card_name,card_number,set_name,language,finish,condition_name&game=eq.magic&ebay_status=eq.active&scryfall_id=is.null&manapool_mapping_status=neq.review&order=title.asc", 40);
+      let matched = 0, review = 0, unmatched = 0;
+      for (const row of pending.slice(0, 40)) {
+        const candidates = await findScryfallCandidates(row);
+        const exact = candidates.filter((candidate) => row.set_name && candidate.set_name.toLowerCase() === String(row.set_name).toLowerCase());
+        const chosen = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+        if (chosen) {
+          await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:chosen.id, manapool_mapping_status:"mapped", manapool_mapping_candidates:candidates, ...manaPoolVariant(row) }) });
+          matched++;
+        } else {
+          const status = candidates.length ? "review" : "unmatched";
+          await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ manapool_mapping_status:status, manapool_mapping_candidates:candidates }) });
+          candidates.length ? review++ : unmatched++;
+        }
+        await new Promise(resolve => setTimeout(resolve, 110));
+      }
+      return NextResponse.json({ ok:true, processed:pending.slice(0,40).length, matched, review, unmatched, remaining:Math.max(0, pending.length - 40), overview:await overview() });
+    }
+    if (mode === "confirm-map") {
+      const id = String(body.id || ""), scryfallId = String(body.scryfall_id || "");
+      if (!/^[0-9a-f-]{36}$/i.test(scryfallId)) throw new Error("Invalid Scryfall ID");
+      const rows = await db(`marketplace_listings?select=id,title,language,finish,condition_name&id=eq.${encodeURIComponent(id)}&game=eq.magic&limit=1`);
+      if (!rows?.[0]) throw new Error("Magic listing not found");
+      await db(`marketplace_listings?id=eq.${encodeURIComponent(id)}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:scryfallId, manapool_mapping_status:"mapped", ...manaPoolVariant(rows[0]) }) });
+      return NextResponse.json({ok:true,overview:await overview()});
+    }
+    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_quantity,scryfall_id,language_id,finish_id,condition_id,manapool_lowest_cents&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
     const updates = listings.map((x:any) => ({
-      tcgplayer_sku: Number(x.tcgplayer_sku), quantity: Number(x.ebay_quantity || 0),
+      scryfall_id: String(x.scryfall_id), language_id:x.language_id || "EN", finish_id:x.finish_id || "NF", condition_id:x.condition_id || "NM", quantity: Number(x.ebay_quantity || 0),
       price_cents: manaPoolPrice(Number(x.manapool_lowest_cents || 0)), custom_external_id: String(x.ebay_listing_id),
     }));
     if (mode === "preview") return NextResponse.json({ preview: updates.slice(0, 100), total: updates.length, enabled: manaPoolSyncEnabled() });

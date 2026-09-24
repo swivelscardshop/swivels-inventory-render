@@ -109,15 +109,15 @@ Requires Node.js 22 and npm.
 
 For local OAuth, create a separate RuName whose accepted URL is
 `http://localhost:3000/api/ebay/callback`.
-# Mana Pool setup (v1.9.0)
+# Mana Pool setup
 
 1. In Supabase SQL Editor, run `supabase/v1.9.0-manapool.sql` once.
 2. In Mana Pool, open **API Integration Settings** and create an access token.
 3. In Render, add `MANAPOOL_API_TOKEN`. Keep `MANAPOOL_SYNC_ENABLED=false` initially.
-4. Redeploy, open the **Mana Pool** tab, and use **Preview changes**.
-5. Map each Magic listing to its numeric `tcgplayer_sku` in `marketplace_listings`. Unmapped listings are skipped.
-6. After the preview is correct, set `MANAPOOL_SYNC_ENABLED=true` in Render and redeploy.
+4. Redeploy, open the **Mana Pool** tab, and click **Map next 40 cards** until the queue is complete.
+5. Review any ambiguous printings shown by the app. Mapping uses Scryfall IDs accepted directly by Mana Pool; a TCGPlayer account or SKU is not required.
+6. Use **Preview changes**. After the preview is correct, set `MANAPOOL_SYNC_ENABLED=true` in Render and redeploy.
 
 Pricing uses `max(40 cents, ceil(lowest Mana Pool price × 1.30))`. Mana Pool orders can be imported from the Mana Pool tab and appear on the Orders page with their allocated Supabase location. Confirming shipment sends fulfillment to Mana Pool, then removes the allocated physical SKU from Supabase.
 
-Live sync is intentionally disabled by default. This version does not guess card mappings from listing titles.
+Live sync is intentionally disabled by default. Automatic matches must be unique; uncertain printings remain in the review list and are never sent until confirmed.
