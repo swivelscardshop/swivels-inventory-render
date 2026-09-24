@@ -117,6 +117,7 @@ For local OAuth, create a separate RuName whose accepted URL is
 4. Redeploy, open the **Mana Pool** tab, and click **Map next 40 cards** until the queue is complete.
 5. Review any ambiguous printings shown by the app. Mapping uses Scryfall IDs accepted directly by Mana Pool; a TCGPlayer account or SKU is not required.
 6. Use **Preview changes**. After the preview is correct, set `MANAPOOL_SYNC_ENABLED=true` in Render and redeploy.
+7. Add `APP_BASE_URL` in Render using the app's public HTTPS address, redeploy, then click **Enable live webhooks** on the Mana Pool page. eBay listing/sale events and signed Mana Pool order events will then be processed by Render while your computer is off.
 
 Pricing uses the exact Scryfall ID, language, condition, and finish. A lowest market price of 40 cents or less is listed at 40 cents; any higher market price is multiplied by 1.30 and rounded up to the next cent. Mana Pool orders can be imported from the Mana Pool tab and appear on the Orders page with their allocated Supabase location. Confirming shipment sends fulfillment to Mana Pool, then removes the allocated physical SKU from Supabase.
 

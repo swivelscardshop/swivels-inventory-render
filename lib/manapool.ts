@@ -147,6 +147,14 @@ export async function getManaPoolOrders() {
   return all;
 }
 
+export async function registerManaPoolWebhook(callbackUrl:string) {
+  return manaPool("/webhooks/register", {method:"PUT",body:JSON.stringify({topic:"order_created",callback_url:callbackUrl})});
+}
+
+export async function listManaPoolWebhooks() {
+  return manaPool("/webhooks?topic=order_created");
+}
+
 export async function getManaPoolOrder(id: string) {
   return manaPool(`/seller/orders/${encodeURIComponent(id)}`);
 }

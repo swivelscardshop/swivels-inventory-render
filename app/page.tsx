@@ -183,6 +183,26 @@ export default function Home() {
     fetch("/api/manapool", { cache: "no-store" }).then(r => r.json()).then(setManaPool).catch(e => setMessage(e.message)).finally(() => setLoading(false));
   }, [view, status.ready]);
   useEffect(() => {
+    // Marketplace webhooks update the hosted database even when no browser is
+    // open. While the app is open, refresh the visible data automatically so
+    // the user never has to click Import eBay just to see webhook changes.
+    const refreshVisible = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        await load();
+        if (view === "orders") await loadOrders();
+        if (view === "inventory") await loadInventory(q,page);
+        if (view === "duplicates") await loadDuplicates();
+        if (view === "manapool") {
+          const r=await fetch("/api/manapool",{cache:"no-store"});
+          if(r.ok)setManaPool(await r.json());
+        }
+      } catch { /* retain the last good screen during a temporary refresh failure */ }
+    };
+    const timer=window.setInterval(refreshVisible,10000);
+    return ()=>window.clearInterval(timer);
+  },[load,loadOrders,loadInventory,loadDuplicates,view,q,page]);
+  useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => setMessage(""), 6000);
     return () => window.clearTimeout(timer);
@@ -201,7 +221,7 @@ export default function Home() {
       if (!r.ok) throw new Error(b.error || "Sync failed");
       setMessage(
         b.warning ||
-          `Imported ${b.listings.toLocaleString()} active listings, detected ${(b.magicSingles || 0).toLocaleString()} Magic singles, and imported ${b.orders.toLocaleString()} order lines.`,
+          `Imported ${b.listings.toLocaleString()} active listings, detected ${(b.magicSingles || 0).toLocaleString()} Magic singles, automatically mapped ${b.automaticallyMapped||0}, published ${b.manaPoolPublished||0} Mana Pool quantity updates, and imported ${b.orders.toLocaleString()} order lines.`,
       );
       await load();
     } catch (e) {
@@ -749,7 +769,9 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
   const [preview, setPreview] = useState<any>(null);
   const [panelData, setPanelData] = useState<any>(data);
   const [mapResult, setMapResult] = useState<any>(null);
+  const [webhooks, setWebhooks] = useState<any>(null);
   useEffect(()=>setPanelData(data),[data]);
+  useEffect(()=>{ fetch("/api/webhooks/setup",{cache:"no-store"}).then(async r=>{const b=await r.json();if(r.ok)setWebhooks(b);}).catch(()=>{}); },[]);
   const run = async (mode:"preview"|"sync") => {
     if (mode === "sync" && !(await confirmAction({ title:"Sync mapped Magic cards?", message:"This will update live Mana Pool quantities and prices for mapped Magic listings. eBay remains unchanged.", confirmLabel:"Sync Mana Pool", tone:"danger" }))) return;
     setWorking(true);
@@ -764,6 +786,12 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
   };
   const orders = async () => {
     setWorking(true); try { const r=await fetch("/api/manapool",{method:"PATCH"}); const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Order import failed"); notify(`Imported ${b.orders} Mana Pool orders and ${b.lines} order lines.`); } catch(e){notify(e instanceof Error?e.message:"Order import failed");} finally{setWorking(false);}
+  };
+  const enableWebhooks = async () => {
+    if (!(await confirmAction({title:"Enable live marketplace webhooks?",message:"eBay and Mana Pool will send listing and sale events directly to this Render service. Sales will update the other marketplace even when your computer is off.",confirmLabel:"Enable live webhooks"}))) return;
+    setWorking(true);
+    try { const r=await fetch("/api/webhooks/setup",{method:"POST"});const b:any=await r.json();if(!r.ok)throw new Error(b.error||"Webhook setup failed");setWebhooks({configured:true,baseUrl:b.baseUrl});notify("Live eBay and Mana Pool webhooks are enabled."); }
+    catch(e){notify(e instanceof Error?e.message:"Webhook setup failed");}finally{setWorking(false);}
   };
   const mapNext = async () => {
     setWorking(true);
@@ -826,6 +854,15 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
             </div>)}
           </div>}
         </>}
+      </section>
+      <section className="panel">
+        <Title k="LIVE CLOUD SYNC" t="Run automatically while your computer is off" />
+        <p className="bodycopy">Webhooks send new eBay listings and marketplace sales directly to this Render service. eBay remains the quantity master, and Supabase prevents the same sale from being processed twice.</p>
+        <div className="modal-actions">
+          <span className={webhooks?.configured?"healthy":"count"}>{webhooks?.configured?"Webhooks enabled":"Setup required"}</span>
+          <button className="primary" disabled={working||!panelData?.configured||webhooks?.configured} onClick={enableWebhooks}>{webhooks?.configured?"Live webhooks enabled":"Enable live webhooks"}</button>
+        </div>
+        {webhooks?.baseUrl&&<p className="bodycopy">Receiving events at {webhooks.baseUrl}</p>}
       </section>
       <section className="panel">
         <Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic singles"/>

@@ -262,6 +262,23 @@ async function tradingCall(callName: string, xml: string) {
     const message = arr<any>(root?.Errors).map(x => x.LongMessage || x.ShortMessage).filter(Boolean).join("; ");
     throw new Error(message || `eBay ${callName} failed (${response.status})`);
   }
+  const parsed: any = new XMLParser({ ignoreAttributes: false }).parse(text);
+  return parsed?.[`${callName}Response`];
+}
+
+export async function configureEbayWebhooks(callbackUrl: string) {
+  if (!/^https:\/\//i.test(callbackUrl)) throw new Error("eBay webhook URL must use HTTPS");
+  return tradingCall("SetNotificationPreferences", `<?xml version="1.0" encoding="utf-8"?>
+    <SetNotificationPreferencesRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+      <ApplicationDeliveryPreferences>
+        <ApplicationEnable>Enable</ApplicationEnable>
+        <ApplicationURL>${xmlEscape(callbackUrl)}</ApplicationURL>
+      </ApplicationDeliveryPreferences>
+      <UserDeliveryPreferenceArray>
+        <NotificationEnable><EventType>FixedPriceTransaction</EventType><EventEnable>Enable</EventEnable></NotificationEnable>
+        <NotificationEnable><EventType>ItemListed</EventType><EventEnable>Enable</EventEnable></NotificationEnable>
+      </UserDeliveryPreferenceArray>
+    </SetNotificationPreferencesRequest>`);
 }
 
 export async function reviseListingQuantity(itemId: string, quantity: number) {

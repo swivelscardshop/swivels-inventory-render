@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { db, dbAll } from "@/lib/supabase";
 import { getManaPoolOrder, getManaPoolOrders, getManaPoolSinglePricesFor, lowestManaPoolPriceForFinish, manaPoolConfigured, manaPoolPrice, manaPoolSyncEnabled, setManaPoolInventory } from "@/lib/manapool";
-import { collectorKey, findScryfallCandidates, manaPoolVariant, titleIdentity } from "@/lib/scryfall";
+import { endListing, reviseListingQuantity } from "@/lib/ebay";
+import { chooseScryfallCandidate, findScryfallCandidates, manaPoolVariant, titleIdentity } from "@/lib/scryfall";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
@@ -55,24 +56,7 @@ export async function POST(request: Request) {
       for (const row of pending.slice(0, 40)) {
         try {
           const candidates = await findScryfallCandidates(row);
-          const normalize = (value:string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g," ").trim();
-          const normalizedTitle = normalize(row.title);
-          const parsed = titleIdentity(row);
-          const titleMatches = candidates.filter((candidate) => {
-            const setName = normalize(candidate.set_name);
-            const setAlias = normalize(String(candidate.set_name).split(":")[0]);
-            const parsedSet = normalize(parsed.setName);
-            const numberInTitle = collectorKey(candidate.collector_number) === collectorKey(parsed.number);
-            const setInTitle = (setName && normalizedTitle.includes(setName)) || (setAlias.length >= 4 && normalizedTitle.includes(setAlias)) ||
-              (parsedSet.length >= 2 && (setName === parsedSet || setAlias === parsedSet || setName.includes(parsedSet) || parsedSet.includes(setAlias)));
-            return Boolean(setInTitle && numberInTitle);
-          });
-          const parsedExact = candidates.filter((candidate) =>
-            normalize(candidate.set_name) === normalize(parsed.setName) &&
-            collectorKey(candidate.collector_number) === collectorKey(parsed.number)
-          );
-          const exact = candidates.filter((candidate) => row.set_name && normalize(candidate.set_name) === normalize(String(row.set_name)) && (!row.card_number || collectorKey(candidate.collector_number) === collectorKey(row.card_number)));
-          const chosen = parsedExact.length === 1 ? parsedExact[0] : titleMatches.length === 1 ? titleMatches[0] : exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+          const chosen = chooseScryfallCandidate(row, candidates);
           if (chosen) {
             await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:chosen.id, manapool_mapping_status:"mapped", manapool_mapping_candidates:candidates, ...manaPoolVariant(row) }) });
             matched++;
@@ -127,27 +111,64 @@ export async function POST(request: Request) {
 export async function PATCH() {
   try {
     const summaries = await getManaPoolOrders();
-    let imported = 0;
+    let imported = 0, ebayReduced = 0, ebayEnded = 0, skipped = 0;
+    const errors:string[] = [];
     for (const summary of summaries) {
       const detail = await getManaPoolOrder(String(summary.id));
       for (const item of detail?.items || detail?.order?.items || []) {
-        const external = String(item.custom_external_id || item.product?.custom_external_id || "");
-        const listingRows = external ? await db(`marketplace_listings?select=id,title,ebay_sku&ebay_listing_id=eq.${encodeURIComponent(external)}&limit=1`) : [];
-        const listing = listingRows?.[0];
-        const quantity = Math.max(1, Number(item.quantity || 1));
-        const locations = listing ? await db(`physical_skus?select=id,sku,location_label,created_at&listing_id=eq.${listing.id}&status=eq.available&order=created_at.asc&limit=${quantity}`) : [];
-        const pulled = (locations || []).slice(0, quantity);
-        const row = { marketplace:"manapool", marketplace_order_id:String(summary.id), listing_id:listing?.id || null, quantity,
-          fulfillment_status:"unfulfilled", refunded:false, ordered_at:summary.created_at || new Date().toISOString(),
-          order_title:item.name || item.product?.single?.name || listing?.title || "Mana Pool order",
-          pull_sku:pulled.map((x:any)=>x.sku).join(", ") || null, pull_location:pulled.map((x:any)=>x.location_label).join(", ") || null,
-          raw_payload:{ order_label:summary.label, shipping_method:summary.shipping_method, mana_pool_order:detail },
-        };
-        await db("marketplace_orders?on_conflict=marketplace,marketplace_order_id,listing_id", { method:"POST", headers:{Prefer:"resolution=merge-duplicates,return=minimal"}, body:JSON.stringify(row) });
-        for (const location of pulled) await db(`physical_skus?id=eq.${location.id}`, { method:"PATCH", body:JSON.stringify({status:"allocated",source_order_id:String(summary.id),updated_at:new Date().toISOString()}) });
-        imported++;
+        try {
+          const external = String(item.custom_external_id || item.product?.custom_external_id || "");
+          const listingRows = external ? await db(`marketplace_listings?select=id,title,ebay_sku,ebay_listing_id,ebay_quantity,ebay_status&ebay_listing_id=eq.${encodeURIComponent(external)}&limit=1`) : [];
+          const listing = listingRows?.[0];
+          const quantity = Math.max(1, Number(item.quantity || 1));
+          const existing = listing ? await db(`marketplace_orders?select=id,fulfillment_status,raw_payload&marketplace=eq.manapool&marketplace_order_id=eq.${encodeURIComponent(String(summary.id))}&listing_id=eq.${listing.id}&limit=1`) : [];
+          if (existing?.[0] && existing[0].fulfillment_status !== "processing") { skipped++; continue; }
+
+          let orderId = existing?.[0]?.id;
+          let targetQuantity = Number(existing?.[0]?.raw_payload?.ebay_sync?.target_quantity);
+          if (!orderId) {
+            targetQuantity = listing ? Math.max(0, Number(listing.ebay_quantity || 0) - quantity) : 0;
+            const locations = listing ? await db(`physical_skus?select=id,sku,location_label,created_at&listing_id=eq.${listing.id}&status=eq.available&order=created_at.asc&limit=${quantity}`) : [];
+            const pulled = (locations || []).slice(0, quantity);
+            const rawPayload = { order_label:summary.label, shipping_method:summary.shipping_method, mana_pool_order:detail,
+              ebay_sync:{ status:"processing", previous_quantity:Number(listing?.ebay_quantity || 0), sold_quantity:quantity, target_quantity:targetQuantity } };
+            const created = await db("marketplace_orders", { method:"POST", headers:{Prefer:"return=representation"}, body:JSON.stringify({
+              marketplace:"manapool", marketplace_order_id:String(summary.id), listing_id:listing?.id || null, quantity,
+              fulfillment_status:"processing", refunded:false, ordered_at:summary.created_at || new Date().toISOString(),
+              order_title:item.name || item.product?.single?.name || listing?.title || "Mana Pool order",
+              pull_sku:pulled.map((x:any)=>x.sku).join(", ") || null, pull_location:pulled.map((x:any)=>x.location_label).join(", ") || null,
+              raw_payload:rawPayload,
+            }) });
+            orderId = created?.[0]?.id;
+            for (const location of pulled) await db(`physical_skus?id=eq.${location.id}`, { method:"PATCH", body:JSON.stringify({status:"allocated",source_order_id:String(summary.id),updated_at:new Date().toISOString()}) });
+          }
+
+          if (listing && Number.isFinite(targetQuantity)) {
+            if (targetQuantity <= 0) {
+              try { await endListing(String(listing.ebay_listing_id)); }
+              catch (error) {
+                if (!/already ended|not active|cannot be accessed|not found/i.test(error instanceof Error ? error.message : "")) throw error;
+              }
+              ebayEnded++;
+            } else {
+              await reviseListingQuantity(String(listing.ebay_listing_id), targetQuantity);
+              ebayReduced++;
+            }
+            await db(`marketplace_listings?id=eq.${listing.id}`, { method:"PATCH", body:JSON.stringify({
+              ebay_quantity:targetQuantity, ebay_status:targetQuantity > 0 ? "active" : "inactive", updated_at:new Date().toISOString(),
+            }) });
+          }
+          if (orderId) {
+            const payload = existing?.[0]?.raw_payload || { order_label:summary.label, shipping_method:summary.shipping_method, mana_pool_order:detail };
+            payload.ebay_sync = { ...(payload.ebay_sync || {}), status:"completed", target_quantity:targetQuantity };
+            await db(`marketplace_orders?id=eq.${orderId}`, { method:"PATCH", body:JSON.stringify({fulfillment_status:"unfulfilled",raw_payload:payload}) });
+          }
+          imported++;
+        } catch (error) {
+          errors.push(`${summary.id}: ${error instanceof Error ? error.message : "unknown error"}`);
+        }
       }
     }
-    return NextResponse.json({ok:true,orders:summaries.length,lines:imported});
+    return NextResponse.json({ok:errors.length===0,orders:summaries.length,lines:imported,ebayReduced,ebayEnded,skipped,errors:errors.slice(0,10)}, {status:errors.length ? 207 : 200});
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Mana Pool order import failed" }, { status: 500 }); }
 }

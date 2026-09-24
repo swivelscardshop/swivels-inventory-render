@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { accessToken, getActiveListings, getOpenOrders, getOrder } from "@/lib/ebay";
 import { db, dbAll } from "@/lib/supabase";
+import { getManaPoolSinglePricesFor, lowestManaPoolPriceForFinish, manaPoolPrice, manaPoolSyncEnabled, setManaPoolInventory } from "@/lib/manapool";
+import { chooseScryfallCandidate, findScryfallCandidates, manaPoolVariant } from "@/lib/scryfall";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -16,6 +18,7 @@ export async function POST() {
     const token = await accessToken();
     const listings = await getActiveListings(token);
     if (!listings.length) throw new Error("eBay returned zero active listings. No Supabase records were changed.");
+    const previousMappedMagic = await dbAll("marketplace_listings?select=id,ebay_listing_id,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
 
     // The normal import is read-only against eBay and refreshes the Supabase catalog.
     await db("marketplace_listings?ebay_status=eq.active", { method: "PATCH", body: JSON.stringify({ ebay_status: "inactive", updated_at: new Date().toISOString() }) });
@@ -37,6 +40,44 @@ export async function POST() {
       await db(`marketplace_listings?ebay_listing_id=in.(${group.join(",")})`, {
         method: "PATCH", body: JSON.stringify({ game: "magic", updated_at: new Date().toISOString() }),
       });
+    }
+
+    // Newly listed Magic singles are mapped automatically when there is one
+    // unambiguous printing. Only genuinely ambiguous cards wait for review.
+    const pendingMagic = await dbAll("marketplace_listings?select=id,title,card_name,card_number,set_name,language,finish,condition_name&game=eq.magic&ebay_status=eq.active&scryfall_id=is.null&manapool_mapping_status=eq.pending&order=title.asc");
+    let automaticallyMapped = 0, mappingReview = 0;
+    for (const row of pendingMagic) {
+      try {
+        const candidates = await findScryfallCandidates(row);
+        const chosen = chooseScryfallCandidate(row, candidates);
+        if (chosen) {
+          await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({scryfall_id:chosen.id,manapool_mapping_status:"mapped",manapool_mapping_candidates:candidates,...manaPoolVariant(row)}) });
+          automaticallyMapped++;
+        } else {
+          await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({manapool_mapping_status:candidates.length?"review":"unmatched",manapool_mapping_candidates:candidates}) });
+          mappingReview++;
+        }
+      } catch { mappingReview++; }
+    }
+
+    // eBay is the quantity master. Every eBay import publishes mapped Magic
+    // singles to Mana Pool, updates quantities, and sends zero for listings
+    // that disappeared from eBay.
+    let manaPoolPublished = 0;
+    if (manaPoolSyncEnabled()) {
+      const activeMapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,ebay_quantity,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+      const priceMap = await getManaPoolSinglePricesFor(activeMapped.map((x:any)=>String(x.scryfall_id)));
+      const updates:any[] = [];
+      for (const row of activeMapped) {
+        const market = priceMap.get(String(row.scryfall_id).toLowerCase());
+        const lowest = market ? lowestManaPoolPriceForFinish(market,row.finish_id||"NF") : null;
+        if (lowest === null) continue;
+        updates.push({scryfall_id:String(row.scryfall_id),language_id:row.language_id||"EN",finish_id:row.finish_id||"NF",condition_id:row.condition_id||"NM",quantity:Number(row.ebay_quantity||0),price_cents:manaPoolPrice(lowest),custom_external_id:String(row.ebay_listing_id)});
+      }
+      const activeIds = new Set(listings.map(x=>String(x.ebay_listing_id)));
+      for (const row of previousMappedMagic.filter((x:any)=>!activeIds.has(String(x.ebay_listing_id)))) updates.push({scryfall_id:String(row.scryfall_id),language_id:row.language_id||"EN",finish_id:row.finish_id||"NF",condition_id:row.condition_id||"NM",quantity:0,price_cents:null,custom_external_id:String(row.ebay_listing_id)});
+      if (updates.length) await setManaPoolInventory(updates);
+      manaPoolPublished=updates.length;
     }
 
     const stored: any[] = [];
@@ -179,7 +220,7 @@ export async function POST() {
       const magicSingles = listings.filter(x => x.game === "magic").length;
       return NextResponse.json({ ok: true, listings: listings.length, magicSingles, orders: 0, warning: `Imported ${listings.length.toLocaleString()} listings including ${magicSingles.toLocaleString()} Magic singles. Orders could not be imported: ${orderError instanceof Error ? orderError.message : "unknown error"}` });
     }
-    return NextResponse.json({ ok: true, listings: listings.length, magicSingles: listings.filter(x => x.game === "magic").length, orders: importedOrders, completedOrders });
+    return NextResponse.json({ ok: true, listings: listings.length, magicSingles: listings.filter(x => x.game === "magic").length, orders: importedOrders, completedOrders, automaticallyMapped, mappingReview, manaPoolPublished });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Sync failed" }, { status: 500 });
   }

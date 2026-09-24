@@ -116,6 +116,27 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
   }).slice(0, 8);
 }
 
+export function chooseScryfallCandidate(row: ListingIdentity, candidates: ScryfallCandidate[]) {
+  const normalize = (value:string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g," ").trim();
+  const normalizedTitle = normalize(row.title);
+  const parsed = titleIdentity(row);
+  const titleMatches = candidates.filter((candidate) => {
+    const setName = normalize(candidate.set_name);
+    const setAlias = normalize(String(candidate.set_name).split(":")[0]);
+    const parsedSet = normalize(parsed.setName);
+    const numberInTitle = collectorKey(candidate.collector_number) === collectorKey(parsed.number);
+    const setInTitle = (setName && normalizedTitle.includes(setName)) || (setAlias.length >= 4 && normalizedTitle.includes(setAlias)) ||
+      (parsedSet.length >= 2 && (setName === parsedSet || setAlias === parsedSet || setName.includes(parsedSet) || parsedSet.includes(setAlias)));
+    return Boolean(setInTitle && numberInTitle);
+  });
+  const parsedExact = candidates.filter((candidate) =>
+    normalize(candidate.set_name) === normalize(parsed.setName) && collectorKey(candidate.collector_number) === collectorKey(parsed.number)
+  );
+  const exact = candidates.filter((candidate) => row.set_name && normalize(candidate.set_name) === normalize(String(row.set_name)) &&
+    (!row.card_number || collectorKey(candidate.collector_number) === collectorKey(row.card_number)));
+  return parsedExact.length === 1 ? parsedExact[0] : titleMatches.length === 1 ? titleMatches[0] : exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+}
+
 export function manaPoolVariant(row: { title:string; language?:string|null; finish?:string|null; condition_name?:string|null }) {
   const title = row.title.toLowerCase();
   const condition = String(row.condition_name || "").toLowerCase();
