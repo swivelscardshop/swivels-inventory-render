@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { accessToken, getActiveListings, getOpenOrders } from "@/lib/ebay";
+import { accessToken, getActiveListings, getOpenOrders, getOrder } from "@/lib/ebay";
 import { db, dbAll } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -77,6 +77,7 @@ export async function POST() {
     }
 
     let importedOrders = 0;
+    let completedOrders = 0;
     try {
       const orders = await getOpenOrders(token);
       const legacyIds = [...new Set(orders.flatMap((order: any) => (order.lineItems || []).map((line: any) => String(line.legacyItemId || ""))).filter(Boolean))];
@@ -125,12 +126,43 @@ export async function POST() {
         importedOrders += 1;
       }
 
+      // Reconcile orders that were shipped or canceled directly on eBay after
+      // they had already been allocated in this app.
+      const openOrderIds = new Set(orders.map((order: any) => String(order.orderId)));
+      const pendingEbayOrders = await dbAll("marketplace_orders?select=id,marketplace_order_id,listing_id,fulfillment_status&marketplace=eq.ebay&fulfillment_status=eq.unfulfilled&refunded=eq.false");
+      const staleOrderIds = [...new Set((pendingEbayOrders || []).map((row: any) => String(row.marketplace_order_id)).filter((id: string) => !openOrderIds.has(id)))];
+      for (const orderId of staleOrderIds) {
+        const current: any = await getOrder(token, orderId);
+        const fulfillment = String(current?.orderFulfillmentStatus || "").toUpperCase();
+        const cancelState = String(current?.cancelStatus?.cancelState || "").toUpperCase();
+        const canceled = cancelState === "CANCELED" || cancelState === "CANCELLED";
+        if (!canceled && fulfillment !== "IN_PROGRESS" && fulfillment !== "FULFILLED") continue;
+        const affected = (pendingEbayOrders || []).filter((row: any) => String(row.marketplace_order_id) === orderId);
+        for (const row of affected) {
+          const listingFilter = row.listing_id ? `&listing_id=eq.${row.listing_id}` : "";
+          if (canceled) {
+            await db(`physical_skus?source_order_id=eq.${encodeURIComponent(orderId)}&status=eq.allocated${listingFilter}`, {
+              method: "PATCH", body: JSON.stringify({ status: "available", source_order_id: null, updated_at: new Date().toISOString() }),
+            });
+            await db(`marketplace_orders?id=eq.${row.id}`, {
+              method: "PATCH", body: JSON.stringify({ fulfillment_status: "fulfilled", refunded: true }),
+            });
+          } else {
+            await db(`physical_skus?source_order_id=eq.${encodeURIComponent(orderId)}&status=eq.allocated${listingFilter}`, { method: "DELETE" });
+            await db(`marketplace_orders?id=eq.${row.id}`, {
+              method: "PATCH", body: JSON.stringify({ fulfillment_status: "fulfilled", sku_removed_at: new Date().toISOString() }),
+            });
+          }
+          completedOrders += 1;
+        }
+      }
+
       // Allocated SKUs remain in Supabase until the user explicitly confirms
-      // shipment from the Orders page.
+      // shipment in the app or eBay reports that fulfillment has started.
     } catch (orderError) {
       return NextResponse.json({ ok: true, listings: listings.length, orders: 0, warning: `Listings imported. Orders could not be imported: ${orderError instanceof Error ? orderError.message : "unknown error"}` });
     }
-    return NextResponse.json({ ok: true, listings: listings.length, magicSingles: listings.filter(x => x.game === "magic").length, orders: importedOrders });
+    return NextResponse.json({ ok: true, listings: listings.length, magicSingles: listings.filter(x => x.game === "magic").length, orders: importedOrders, completedOrders });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Sync failed" }, { status: 500 });
   }

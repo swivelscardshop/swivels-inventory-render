@@ -101,7 +101,7 @@ const specificMap = (item: any) => {
 async function getMagicSinglesStoreCategoryIds(token: string) {
   // Swivels Card Shop's exact eBay Store category. Keeping this explicit prevents
   // the Magic parent category (and its sealed-products child) from being synced.
-  const matches = new Set<string>(["45236711016"]);
+  const matches = new Set<string>(["45236711016", "name:magic the gathering singles"]);
   const xml = `<?xml version="1.0" encoding="utf-8"?><GetStoreRequest xmlns="urn:ebay:apis:eBLBaseComponents"><CategoryStructureOnly>true</CategoryStructureOnly></GetStoreRequest>`;
   const response = await fetch("https://api.ebay.com/ws/api.dll", {
     method: "POST", cache: "no-store",
@@ -118,7 +118,10 @@ async function getMagicSinglesStoreCategoryIds(token: string) {
   const visit = (category: any) => {
     if (!category) return;
     const name = String(category.Name || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    if (name === "magic the gathering singles") matches.add(String(category.CategoryID));
+    if (name === "magic the gathering singles") {
+      matches.add(String(category.CategoryID));
+      matches.add(`name:${name}`);
+    }
     for (const child of arr<any>(category.ChildCategory)) visit(child);
   };
   for (const category of arr<any>(parsed?.Store?.CustomCategories?.CustomCategory)) visit(category);
@@ -150,7 +153,10 @@ async function getActiveStoreCategoryIds(token: string) {
       if (!item?.ItemID) continue;
       const ids = [item.Storefront?.StoreCategoryID, item.Storefront?.StoreCategory2ID]
         .filter(Boolean).map(String);
-      categoryByItemId.set(String(item.ItemID), ids);
+      const names = [item.Storefront?.StoreCategoryName, item.Storefront?.StoreCategory2Name]
+        .filter(Boolean)
+        .map((name) => `name:${String(name).trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}`);
+      categoryByItemId.set(String(item.ItemID), [...ids, ...names]);
     }
     const totalPages = Number(parsed?.PaginationResult?.TotalNumberOfPages || page);
     more = page < totalPages;
@@ -193,8 +199,12 @@ export async function getActiveListings(token: string) {
       const sealedTerms = /\b(booster box|booster pack|bundle|collection box|collector booster|draft booster|set booster|play booster|starter kit|commander deck|precon|sealed case|fat pack|theme deck)\b/;
       const isSealedMagic = categoryName.includes("sealed") || sealedTerms.test(lower);
       const isMagic = gameSpecific.includes("magic") || gameSpecific === "mtg" || lower.includes("magic: the gathering") || /\bmtg\b/.test(lower);
-      const storeCategoryIds = sellerListStoreCategories.get(String(item.ItemID)) ||
-        [item.Storefront?.StoreCategoryID, item.Storefront?.StoreCategory2ID].filter(Boolean).map(String);
+      const fallbackStoreCategories = [item.Storefront?.StoreCategoryID, item.Storefront?.StoreCategory2ID]
+        .filter(Boolean).map(String);
+      fallbackStoreCategories.push(...[item.Storefront?.StoreCategoryName, item.Storefront?.StoreCategory2Name]
+        .filter(Boolean)
+        .map((name) => `name:${String(name).trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}`));
+      const storeCategoryIds = sellerListStoreCategories.get(String(item.ItemID)) || fallbackStoreCategories;
       const isMagicStoreSingle = storeCategoryIds.some((id) => magicSinglesStoreCategoryIds.has(id));
       const magicEligible = magicSinglesStoreCategoryIds.size > 0 ? isMagicStoreSingle : isMagic && !isSealedMagic;
       const game: EbayListing["game"] = magicEligible
@@ -258,7 +268,9 @@ export async function endListing(itemId: string) {
 }
 
 export async function getOpenOrders(token: string) {
-  const filter = encodeURIComponent("orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}");
+  // Only orders that have not begun fulfillment belong in Ready to pull.
+  // Once shipping is created on eBay the order moves to IN_PROGRESS.
+  const filter = encodeURIComponent("orderfulfillmentstatus:{NOT_STARTED}");
   const orders: any[] = [];
   let offset = 0;
   while (true) {
