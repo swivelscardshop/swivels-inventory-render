@@ -195,11 +195,12 @@ export async function getActiveListings(token: string) {
       const lower = title.toLowerCase();
       const specifics = specificMap(item);
       const gameSpecific = String(specifics.get("game") || "").toLowerCase();
+      const categoryId = String(item.PrimaryCategory?.CategoryID || "");
       const categoryName = String(item.PrimaryCategory?.CategoryName || "").toLowerCase();
       const sealedTerms = /\b(booster box|booster pack|bundle|collection box|collector booster|draft booster|set booster|play booster|starter kit|commander deck|precon|sealed case|fat pack|theme deck)\b/;
       const isSealedMagic = categoryName.includes("sealed") || sealedTerms.test(lower);
       const isMagic = gameSpecific.includes("magic") || gameSpecific === "mtg" || lower.includes("magic: the gathering") || /\bmtg\b/.test(lower);
-      const isSingleCardCategory = /\b(individual|single|singles)\b/.test(categoryName) ||
+      const isSingleCardCategory = categoryId === "183454" || /\b(individual|single|singles)\b/.test(categoryName) ||
         (/\b(card|cards)\b/.test(categoryName) && !/\b(sealed|pack|box|deck|lot|set)\b/.test(categoryName));
       const fallbackStoreCategories = [item.Storefront?.StoreCategoryID, item.Storefront?.StoreCategory2ID]
         .filter(Boolean).map(String);
@@ -272,7 +273,7 @@ export async function endListing(itemId: string) {
 export async function getOpenOrders(token: string) {
   // Only orders that have not begun fulfillment belong in Ready to pull.
   // Once shipping is created on eBay the order moves to IN_PROGRESS.
-  const filter = encodeURIComponent("orderfulfillmentstatus:{NOT_STARTED}");
+  const filter = encodeURIComponent("orderfulfillmentstatus:NOT_STARTED");
   const orders: any[] = [];
   let offset = 0;
   while (true) {

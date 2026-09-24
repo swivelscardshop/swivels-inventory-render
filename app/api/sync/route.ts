@@ -160,7 +160,8 @@ export async function POST() {
       // Allocated SKUs remain in Supabase until the user explicitly confirms
       // shipment in the app or eBay reports that fulfillment has started.
     } catch (orderError) {
-      return NextResponse.json({ ok: true, listings: listings.length, orders: 0, warning: `Listings imported. Orders could not be imported: ${orderError instanceof Error ? orderError.message : "unknown error"}` });
+      const magicSingles = listings.filter(x => x.game === "magic").length;
+      return NextResponse.json({ ok: true, listings: listings.length, magicSingles, orders: 0, warning: `Imported ${listings.length.toLocaleString()} listings including ${magicSingles.toLocaleString()} Magic singles. Orders could not be imported: ${orderError instanceof Error ? orderError.message : "unknown error"}` });
     }
     return NextResponse.json({ ok: true, listings: listings.length, magicSingles: listings.filter(x => x.game === "magic").length, orders: importedOrders, completedOrders });
   } catch (error) {
