@@ -19,6 +19,9 @@ export async function POST() {
 
     // The normal import is read-only against eBay and refreshes the Supabase catalog.
     await db("marketplace_listings?ebay_status=eq.active", { method: "PATCH", body: JSON.stringify({ ebay_status: "inactive", updated_at: new Date().toISOString() }) });
+    // Remove stale Magic classifications before rebuilding them from the exact
+    // eBay Store category assigned to each current listing.
+    await db("marketplace_listings?game=eq.magic", { method: "PATCH", body: JSON.stringify({ game: "other", updated_at: new Date().toISOString() }) });
     for (const group of chunks(listings)) {
       const databaseRows = group.map(({ started_at: _startedAt, ...listing }) => listing);
       await db("marketplace_listings?on_conflict=ebay_listing_id", {
@@ -127,7 +130,7 @@ export async function POST() {
     } catch (orderError) {
       return NextResponse.json({ ok: true, listings: listings.length, orders: 0, warning: `Listings imported. Orders could not be imported: ${orderError instanceof Error ? orderError.message : "unknown error"}` });
     }
-    return NextResponse.json({ ok: true, listings: listings.length, orders: importedOrders });
+    return NextResponse.json({ ok: true, listings: listings.length, magicSingles: listings.filter(x => x.game === "magic").length, orders: importedOrders });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Sync failed" }, { status: 500 });
   }

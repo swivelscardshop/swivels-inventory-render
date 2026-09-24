@@ -125,10 +125,45 @@ async function getMagicSinglesStoreCategoryIds(token: string) {
   return matches;
 }
 
+async function getActiveStoreCategoryIds(token: string) {
+  const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: true });
+  const categoryByItemId = new Map<string, string[]>();
+  const endFrom = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const endTo = new Date(Date.now() + 120 * 24 * 60 * 60 * 1000).toISOString();
+  let page = 1;
+  let more = true;
+  while (more) {
+    const xml = `<?xml version="1.0" encoding="utf-8"?><GetSellerListRequest xmlns="urn:ebay:apis:eBLBaseComponents"><DetailLevel>ReturnAll</DetailLevel><EndTimeFrom>${endFrom}</EndTimeFrom><EndTimeTo>${endTo}</EndTimeTo><IncludeWatchCount>false</IncludeWatchCount><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></GetSellerListRequest>`;
+    const response = await fetch("https://api.ebay.com/ws/api.dll", {
+      method: "POST", cache: "no-store",
+      headers: {
+        "X-EBAY-API-CALL-NAME": "GetSellerList", "X-EBAY-API-SITEID": "0",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "1423", "X-EBAY-API-IAF-TOKEN": token,
+        "Content-Type": "text/xml",
+      }, body: xml,
+    });
+    const text = await response.text();
+    if (!response.ok) break;
+    const parsed: any = parser.parse(text)?.GetSellerListResponse;
+    if (!["Success", "Warning"].includes(parsed?.Ack)) break;
+    for (const item of arr<any>(parsed?.ItemArray?.Item)) {
+      if (!item?.ItemID) continue;
+      const ids = [item.Storefront?.StoreCategoryID, item.Storefront?.StoreCategory2ID]
+        .filter(Boolean).map(String);
+      categoryByItemId.set(String(item.ItemID), ids);
+    }
+    const totalPages = Number(parsed?.PaginationResult?.TotalNumberOfPages || page);
+    more = page < totalPages;
+    page += 1;
+  }
+  return categoryByItemId;
+}
+
 export async function getActiveListings(token: string) {
   const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: true });
   const results: EbayListing[] = [];
   const magicSinglesStoreCategoryIds = await getMagicSinglesStoreCategoryIds(token);
+  const sellerListStoreCategories = await getActiveStoreCategoryIds(token);
   let page = 1, more = true;
   while (more) {
     const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList><DetailLevel>ReturnAll</DetailLevel></GetMyeBaySellingRequest>`;
@@ -158,7 +193,8 @@ export async function getActiveListings(token: string) {
       const sealedTerms = /\b(booster box|booster pack|bundle|collection box|collector booster|draft booster|set booster|play booster|starter kit|commander deck|precon|sealed case|fat pack|theme deck)\b/;
       const isSealedMagic = categoryName.includes("sealed") || sealedTerms.test(lower);
       const isMagic = gameSpecific.includes("magic") || gameSpecific === "mtg" || lower.includes("magic: the gathering") || /\bmtg\b/.test(lower);
-      const storeCategoryIds = [item.Storefront?.StoreCategoryID, item.Storefront?.StoreCategory2ID].filter(Boolean).map(String);
+      const storeCategoryIds = sellerListStoreCategories.get(String(item.ItemID)) ||
+        [item.Storefront?.StoreCategoryID, item.Storefront?.StoreCategory2ID].filter(Boolean).map(String);
       const isMagicStoreSingle = storeCategoryIds.some((id) => magicSinglesStoreCategoryIds.has(id));
       const magicEligible = magicSinglesStoreCategoryIds.size > 0 ? isMagicStoreSingle : isMagic && !isSealedMagic;
       const game: EbayListing["game"] = magicEligible
