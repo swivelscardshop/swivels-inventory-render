@@ -16,6 +16,12 @@ export type ScryfallCandidate = {
 
 const clean = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
 
+export function collectorKey(value: string | null | undefined) {
+  const raw = String(value || "").split("/")[0].trim().toLowerCase();
+  const match = raw.match(/^0*(\d+)([a-z]*)$/i);
+  return match ? `${Number(match[1])}${match[2] || ""}` : clean(raw);
+}
+
 export function titleIdentity(row: ListingIdentity) {
   const title = String(row.title || "").replace(/\s+/g, " ").trim();
   const gameMarker = title.search(/\s+(?:Magic\s*:\s*The Gathering|Magic The Gathering|MTG)\b/i);
@@ -54,7 +60,8 @@ export function titleIdentity(row: ListingIdentity) {
 export async function findScryfallCandidates(row: ListingIdentity): Promise<ScryfallCandidate[]> {
   const { name, number, setName } = titleIdentity(row);
   if (!name || name.length < 2) return [];
-  const terms = [`!\"${name.replace(/\"/g, "")}\"`, number ? `number:${number}` : ""].filter(Boolean).join(" ");
+  const queryNumber = collectorKey(number);
+  const terms = [`!\"${name.replace(/\"/g, "")}\"`, queryNumber ? `cn:${queryNumber}` : ""].filter(Boolean).join(" ");
   const headers = { "User-Agent": "SwivelsInventory/1.10.8", Accept: "application/json" };
   const get = async (url: string, retry = true): Promise<any> => {
     const response = await fetch(url, { cache:"no-store", headers });
@@ -76,7 +83,7 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
   const title = clean(row.title);
   const setHint = clean(setName);
   let sourceCards = body?.data || [];
-  if (number) sourceCards = sourceCards.filter((card:any) => clean(String(card.collector_number || "")) === clean(number));
+  if (number) sourceCards = sourceCards.filter((card:any) => collectorKey(card.collector_number) === collectorKey(number));
   const cards = sourceCards.map((card: any) => ({
     id: String(card.id), name: String(card.name), set: String(card.set), set_name: String(card.set_name),
     collector_number: String(card.collector_number),
@@ -87,7 +94,7 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
       const setName = clean(candidate.set_name);
       const setAlias = clean(candidate.set_name.split(":")[0]);
       const hintMatches = setHint && (setName === setHint || setAlias === setHint || setName.includes(setHint) || setHint.includes(setAlias));
-      return (hintMatches ? 6 : 0) + (setName && title.includes(setName) ? 3 : 0) + (number && clean(candidate.collector_number) === clean(number) ? 2 : 0);
+      return (hintMatches ? 6 : 0) + (setName && title.includes(setName) ? 3 : 0) + (number && collectorKey(candidate.collector_number) === collectorKey(number) ? 2 : 0);
     };
     return score(b) - score(a);
   }).slice(0, 8);
