@@ -79,7 +79,8 @@ export async function POST() {
     let importedOrders = 0;
     let completedOrders = 0;
     try {
-      const orders = await getOpenOrders(token);
+      const fetchedOrders = await getOpenOrders(token);
+      const orders = fetchedOrders.filter((order: any) => String(order.orderFulfillmentStatus || "").toUpperCase() === "NOT_STARTED");
       const legacyIds = [...new Set(orders.flatMap((order: any) => (order.lineItems || []).map((line: any) => String(line.legacyItemId || ""))).filter(Boolean))];
       const orderListings: any[] = [];
       for (const group of chunks(legacyIds, 150)) orderListings.push(...await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url&ebay_listing_id=in.(${group.join(",")})`));

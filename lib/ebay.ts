@@ -212,7 +212,8 @@ export async function getActiveListings(token: string) {
         .map((name) => `name:${String(name).trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}`));
       const storeCategoryIds = sellerListStoreCategories.get(String(item.ItemID)) || fallbackStoreCategories;
       const isMagicStoreSingle = storeCategoryIds.some((id) => magicSinglesStoreCategoryIds.has(id));
-      const magicEligible = isMagicStoreSingle || (isMagic && !isSealedMagic && (hasCardIdentity || isSingleCardCategory));
+      const hasInventorySku = Boolean(String(item.SKU || "").trim());
+      const magicEligible = isMagicStoreSingle || (isMagic && !isSealedMagic && hasInventorySku);
       const game: EbayListing["game"] = magicEligible
         ? "magic"
         : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") || lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other";
@@ -276,7 +277,7 @@ export async function endListing(itemId: string) {
 export async function getOpenOrders(token: string) {
   // Only orders that have not begun fulfillment belong in Ready to pull.
   // Once shipping is created on eBay the order moves to IN_PROGRESS.
-  const filter = encodeURIComponent("orderfulfillmentstatus:NOT_STARTED");
+  const filter = encodeURIComponent("orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}");
   const orders: any[] = [];
   let offset = 0;
   while (true) {
