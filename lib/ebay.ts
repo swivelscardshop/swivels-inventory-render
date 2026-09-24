@@ -202,6 +202,9 @@ export async function getActiveListings(token: string) {
       const isMagic = gameSpecific.includes("magic") || gameSpecific === "mtg" || lower.includes("magic: the gathering") || /\bmtg\b/.test(lower);
       const isSingleCardCategory = categoryId === "183454" || /\b(individual|single|singles)\b/.test(categoryName) ||
         (/\b(card|cards)\b/.test(categoryName) && !/\b(sealed|pack|box|deck|lot|set)\b/.test(categoryName));
+      const hasCardIdentity = Boolean(
+        specifics.get("card name") || specifics.get("card number") || specifics.get("collector number") || specifics.get("set number")
+      ) || /\b\d{1,4}[a-z]?\s*\/\s*\d{1,4}\b/i.test(title);
       const fallbackStoreCategories = [item.Storefront?.StoreCategoryID, item.Storefront?.StoreCategory2ID]
         .filter(Boolean).map(String);
       fallbackStoreCategories.push(...[item.Storefront?.StoreCategoryName, item.Storefront?.StoreCategory2Name]
@@ -209,7 +212,7 @@ export async function getActiveListings(token: string) {
         .map((name) => `name:${String(name).trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}`));
       const storeCategoryIds = sellerListStoreCategories.get(String(item.ItemID)) || fallbackStoreCategories;
       const isMagicStoreSingle = storeCategoryIds.some((id) => magicSinglesStoreCategoryIds.has(id));
-      const magicEligible = isMagicStoreSingle || (isMagic && isSingleCardCategory && !isSealedMagic);
+      const magicEligible = isMagicStoreSingle || (isMagic && !isSealedMagic && (hasCardIdentity || isSingleCardCategory));
       const game: EbayListing["game"] = magicEligible
         ? "magic"
         : gameSpecific.includes("pokemon") || gameSpecific.includes("pokémon") || lower.includes("pokemon") || lower.includes("pokémon") ? "pokemon" : "other";

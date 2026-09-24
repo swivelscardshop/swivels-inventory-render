@@ -201,7 +201,7 @@ export default function Home() {
       if (!r.ok) throw new Error(b.error || "Sync failed");
       setMessage(
         b.warning ||
-          `Imported ${b.listings.toLocaleString()} active listings and ${b.orders.toLocaleString()} order lines.`,
+          `Imported ${b.listings.toLocaleString()} active listings, detected ${(b.magicSingles || 0).toLocaleString()} Magic singles, and imported ${b.orders.toLocaleString()} order lines.`,
       );
       await load();
     } catch (e) {
