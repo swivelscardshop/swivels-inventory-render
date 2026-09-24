@@ -33,15 +33,29 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
   const { name, number } = titleIdentity(row);
   if (!name || name.length < 2) return [];
   const terms = [`!\"${name.replace(/\"/g, "")}\"`, number ? `number:${number}` : ""].filter(Boolean).join(" ");
-  const response = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(terms)}&unique=prints`, {
-    cache: "no-store", headers: { "User-Agent": "SwivelsInventory/1.10.7", Accept: "application/json" },
-  });
-  if (response.status === 404) return [];
-  if (!response.ok) throw new Error(`Scryfall lookup failed (${response.status})`);
-  const body: any = await response.json();
+  const headers = { "User-Agent": "SwivelsInventory/1.10.8", Accept: "application/json" };
+  const get = async (url: string, retry = true): Promise<any> => {
+    const response = await fetch(url, { cache:"no-store", headers });
+    if (response.status === 429 && retry) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return get(url, false);
+    }
+    if (!response.ok) return null;
+    return response.json();
+  };
+  let body: any = await get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(terms)}&unique=prints`);
+  // Titles sometimes contain punctuation that Scryfall's exact-search parser
+  // rejects. Resolve the card name fuzzily, then load all of its printings.
+  if (!body?.data?.length) {
+    const named = await get(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name.slice(0, 180))}`);
+    if (!named) return [];
+    body = named.prints_search_uri ? await get(String(named.prints_search_uri)) : { data:[named] };
+  }
   const title = clean(row.title);
   const setHint = clean(String(row.set_name || ""));
-  const cards = (body.data || []).map((card: any) => ({
+  let sourceCards = body?.data || [];
+  if (number) sourceCards = sourceCards.filter((card:any) => clean(String(card.collector_number || "")) === clean(number));
+  const cards = sourceCards.map((card: any) => ({
     id: String(card.id), name: String(card.name), set: String(card.set), set_name: String(card.set_name),
     collector_number: String(card.collector_number),
     image_url: card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal || null,

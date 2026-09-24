@@ -764,7 +764,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
     try {
       const r=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"map"})});
       const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Magic mapping failed");
-      notify(`Checked ${b.processed} cards: ${b.matched} mapped, ${b.review} need review, ${b.unmatched} unmatched.`);
+      notify(`Checked ${b.processed} cards: ${b.matched} mapped, ${b.review} need review, ${b.unmatched} unmatched${b.failed?`, ${b.failed} will retry`:""}.`);
       window.setTimeout(()=>window.location.reload(),900);
     } catch(e){notify(e instanceof Error?e.message:"Magic mapping failed");} finally{setWorking(false);}
   };
