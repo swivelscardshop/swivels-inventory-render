@@ -9,23 +9,34 @@ export function manaPoolSyncEnabled() {
 }
 
 export async function manaPool(path: string, init: RequestInit = {}) {
-  const token = process.env.MANAPOOL_API_TOKEN;
-  const email = process.env.MANAPOOL_API_EMAIL;
+  const token = process.env.MANAPOOL_API_TOKEN?.trim();
+  const email = process.env.MANAPOOL_API_EMAIL?.trim();
   if (!token || !email) throw new Error("MANAPOOL_API_TOKEN and MANAPOOL_API_EMAIL are required in Render");
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     cache: "no-store",
     headers: {
-      Authorization: `Bearer ${token}`,
       "X-ManaPool-Access-Token": token,
       "X-ManaPool-Email": email,
+      "User-Agent": "Swivels-Inventory/1.10.20",
       Accept: "application/json",
       "Content-Type": "application/json",
       ...(init.headers || {}),
     },
   });
   const text = await response.text();
-  const body = text ? JSON.parse(text) : null;
+  const contentType = response.headers.get("content-type") || "";
+  let body: any = null;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      if (/<!doctype|<html/i.test(text) || contentType.includes("text/html")) {
+        throw new Error(`Mana Pool returned a webpage instead of API data (${response.status}). Verify MANAPOOL_API_EMAIL and MANAPOOL_API_TOKEN in Render, then redeploy.`);
+      }
+      throw new Error(`Mana Pool returned an unreadable API response (${response.status}, ${contentType || "unknown content type"}).`);
+    }
+  }
   if (!response.ok) throw new Error(`Mana Pool ${response.status}: ${body?.message || text || "Request failed"}`);
   return body;
 }
