@@ -23,11 +23,14 @@ export function collectorKey(value: string | null | undefined) {
 }
 
 export function titleIdentity(row: ListingIdentity) {
-  const title = String(row.title || "").replace(/\s+/g, " ").trim();
+  // Card Uploader adds display variants such as (Showcase), (Borderless),
+  // or a repeated collector number like (0271). These labels are not part of
+  // the Scryfall card name, so ignore the parentheses and everything in them.
+  const title = String(row.title || "").replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
   const gameMarker = title.search(/\s+(?:Magic\s*:\s*The Gathering|Magic The Gathering|MTG)\b/i);
   const identitySection = (gameMarker >= 0 ? title.slice(0, gameMarker) : title).trim();
-  const finishMatch = identitySection.match(/\s+(Etched Foil|Non[- ]?Foil|Foil)\s*$/i);
-  const beforeFinish = (finishMatch ? identitySection.slice(0, finishMatch.index) : identitySection).trim();
+  const finishMatch = identitySection.match(/(?:^|\s)(Etched Foil|Non[- ]?Foil|Foil)(?=\s|$)/i);
+  const beforeFinish = identitySection.replace(/(?:^|\s)(Etched Foil|Non[- ]?Foil|Foil)(?=\s|$)/ig, " ").replace(/\s+/g," ").trim();
   const slashNumber = beforeFinish.match(/\b([A-Z]?\d{1,4}[a-z]?)\s*\/\s*\d{1,4}\b/i);
   // Magic titles use a plain collector number between the card name and set
   // name. eBay item specifics are preferred when present; otherwise locate
@@ -39,7 +42,7 @@ export function titleIdentity(row: ListingIdentity) {
   });
   const number = String(row.card_number || positional?.[1] || "").split("/")[0].trim();
   const numberIndex = positional?.index == null ? -1 : positional.index + positional[0].length - positional[1].length;
-  let name = String(row.card_name || "").trim();
+  let name = String(row.card_name || "").replace(/\([^)]*\)/g, " ").replace(/\s+/g," ").trim();
   if (!name && numberIndex >= 0) name = beforeFinish.slice(0, numberIndex).trim();
   if (!name) {
     name = title
@@ -52,8 +55,12 @@ export function titleIdentity(row: ListingIdentity) {
   return {
     name,
     number,
-    setName: String(row.set_name || inferredSet || "").trim(),
-    finish: finishMatch && !/^non/i.test(finishMatch[1]) ? finishMatch[1] : "Non-Foil",
+    // The title is authoritative. Some eBay item-specific imports place the
+    // finish at the beginning of set_name (for example "Foil Lorwyn
+    // Eclipsed"), which must not be treated as the actual set name.
+    setName: String(inferredSet || row.set_name || "").replace(/\([^)]*\)/g, " ").replace(/\s+/g," ").trim(),
+    finish: /\betched\s+foil\b/i.test(identitySection) ? "Etched Foil" :
+      (/\bfoil\b/i.test(identitySection) && !/\bnon[- ]?foil\b/i.test(identitySection) ? "Foil" : "Non-Foil"),
   };
 }
 
