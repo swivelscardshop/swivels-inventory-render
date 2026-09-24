@@ -6,7 +6,22 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 async function overview() {
-  const mapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_quantity,scryfall_id,manapool_mapping_status,manapool_mapping_candidates,manapool_price_cents,manapool_quantity&game=eq.magic&ebay_status=eq.active&order=title.asc");
+  const mapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,card_name,card_number,set_name,finish,condition_name,ebay_quantity,scryfall_id,manapool_mapping_status,manapool_mapping_candidates,manapool_price_cents,manapool_quantity&game=eq.magic&ebay_status=eq.active&order=title.asc");
+  const unresolvedDetails = mapped
+    .filter((x:any) => !x.scryfall_id && ["unmatched","review"].includes(x.manapool_mapping_status))
+    .map((x:any) => {
+      const parsed = titleIdentity(x);
+      const candidates = Array.isArray(x.manapool_mapping_candidates) ? x.manapool_mapping_candidates : [];
+      let reason = "No Scryfall printing matched the parsed card name and collector number.";
+      if (!parsed.name) reason = "Card name could not be parsed from the eBay title.";
+      else if (!parsed.number) reason = "Collector number could not be parsed from the eBay title.";
+      else if (x.manapool_mapping_status === "review" && candidates.length) reason = `${candidates.length} possible printings were found; manual selection is required.`;
+      return {
+        id:x.id, ebay_listing_id:x.ebay_listing_id, title:x.title, status:x.manapool_mapping_status,
+        parsed_name:parsed.name || "", parsed_number:parsed.number || "", parsed_set:parsed.setName || "",
+        parsed_finish:parsed.finish || "Non-Foil", reason,
+      };
+    });
   return {
     configured: manaPoolConfigured(), enabled: manaPoolSyncEnabled(),
     mapped: mapped.filter((x:any) => x.scryfall_id).length,
@@ -15,6 +30,7 @@ async function overview() {
     reviewCount: mapped.filter((x:any) => x.manapool_mapping_status === "review").length,
     queued: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status === "pending").length,
     unmatched: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status === "unmatched").length,
+    unresolvedDetails,
   };
 }
 
@@ -68,7 +84,7 @@ export async function POST(request: Request) {
         }
         await new Promise(resolve => setTimeout(resolve, 110));
       }
-      return NextResponse.json({ ok:true, processed:pending.slice(0,40).length, matched, review, unmatched, failed, remaining:Math.max(0, pending.length - 40), overview:await overview() });
+      return NextResponse.json({ ok:true, processed:pending.slice(0,40).length, matched, review, unmatched, failed, remaining:Math.max(0, pending.length - 40 + failed), overview:await overview() });
     }
     if (mode === "confirm-map") {
       const id = String(body.id || ""), scryfallId = String(body.scryfall_id || "");

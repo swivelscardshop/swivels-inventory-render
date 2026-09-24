@@ -62,15 +62,24 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
   if (!name || name.length < 2) return [];
   const queryNumber = collectorKey(number);
   const terms = [`!\"${name.replace(/\"/g, "")}\"`, queryNumber ? `cn:${queryNumber}` : ""].filter(Boolean).join(" ");
-  const headers = { "User-Agent": "SwivelsInventory/1.10.8", Accept: "application/json" };
-  const get = async (url: string, retry = true): Promise<any> => {
-    const response = await fetch(url, { cache:"no-store", headers });
-    if (response.status === 429 && retry) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      return get(url, false);
+  const headers = { "User-Agent": "SwivelsInventory/1.10.14", Accept: "application/json" };
+  const get = async (url: string): Promise<any> => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      // Scryfall asks integrations to leave a short delay between requests.
+      // This also prevents a whole 40-card batch from being mislabeled when
+      // the catalog briefly throttles the server.
+      await new Promise(resolve => setTimeout(resolve, 125));
+      const response = await fetch(url, { cache:"no-store", headers });
+      if (response.ok) return response.json();
+      if (response.status === 404) return null;
+      if (response.status === 429 || response.status >= 500) {
+        const retryAfter = Number(response.headers.get("retry-after") || 0) * 1000;
+        await new Promise(resolve => setTimeout(resolve, Math.max(retryAfter, 500 * (attempt + 1))));
+        continue;
+      }
+      throw new Error(`Scryfall lookup failed (${response.status})`);
     }
-    if (!response.ok) return null;
-    return response.json();
+    throw new Error("Scryfall lookup temporarily unavailable after retries");
   };
   let body: any = await get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(terms)}&unique=prints`);
   // Titles sometimes contain punctuation that Scryfall's exact-search parser

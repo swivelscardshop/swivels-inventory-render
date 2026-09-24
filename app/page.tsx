@@ -768,7 +768,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
       const r=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"map"})});
       const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Magic mapping failed");
       setPanelData(b.overview); setMapResult(b);
-      notify(`Checked ${b.processed} cards: ${b.matched} mapped, ${b.review} need review, ${b.unmatched} unmatched${b.failed?`, ${b.failed} will retry`:""}.`);
+      notify(`Checked ${b.processed} cards: ${b.matched} mapped, ${b.review} need review, ${b.unmatched} truly unmatched${b.failed?`, ${b.failed} lookup failures remain queued`:""}.`);
     } catch(e){notify(e instanceof Error?e.message:"Magic mapping failed");} finally{setWorking(false);}
   };
   const confirmMap = async (listing:any,candidate:any) => {
@@ -786,6 +786,16 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
       const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Could not reset unresolved cards");
       setPanelData(b.overview); setMapResult(null); notify("Unresolved cards are queued for a fresh mapping check.");
     } catch(e){notify(e instanceof Error?e.message:"Could not reset unresolved cards");} finally{setWorking(false);}
+  };
+  const downloadUnmatchedLog = () => {
+    const rows = panelData?.unresolvedDetails || [];
+    const quote = (value:any) => `"${String(value ?? "").replace(/"/g,'""')}"`;
+    const csv = [
+      ["eBay Listing ID","eBay Title","Status","Parsed Card Name","Parsed Collector Number","Parsed Set","Parsed Finish","Reason"].map(quote).join(","),
+      ...rows.map((x:any) => [x.ebay_listing_id,x.title,x.status,x.parsed_name,x.parsed_number,x.parsed_set,x.parsed_finish,x.reason].map(quote).join(",")),
+    ].join("\n");
+    const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+    const link = document.createElement("a"); link.href=url; link.download="manapool-unmatched-mapping-log.csv"; link.click(); URL.revokeObjectURL(url);
   };
   return <div className="stack">
     <Intro title="Mana Pool connection" text="Sync active eBay Magic: The Gathering individual-card listings. Sealed packs, boxes, decks, and products remain excluded." action={<span className={panelData?.configured?"healthy":"count"}>{panelData?.configured?"Connected":"Token required"}</span>} />
@@ -812,8 +822,16 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
           {!!((panelData?.unmatched||0)+(panelData?.reviewCount||0)) && <button className="secondary" disabled={working} onClick={retryUnresolved}>Recheck {(panelData?.unmatched||0)+(panelData?.reviewCount||0)} unresolved cards</button>}
           <button className="primary" disabled={working||!panelData?.configured||!panelData?.queued} onClick={mapNext}>{working?"Checking cards…":panelData?.queued?`Map next ${Math.min(40,panelData.queued)} cards`:"All queued cards checked"}</button>
         </div>
-        {mapResult && <div className="mapping-summary"><b>Last mapping batch</b><div><span><strong>{mapResult.processed}</strong> checked</span><span><strong>{mapResult.matched}</strong> mapped</span><span><strong>{mapResult.review}</strong> need review</span><span><strong>{mapResult.unmatched}</strong> unmatched</span><span><strong>{panelData?.queued||0}</strong> remaining</span></div><small>This result stays here until you run another batch or leave the page.</small></div>}
+        {mapResult && <div className="mapping-summary"><b>Last mapping batch</b><div><span><strong>{mapResult.processed}</strong> checked</span><span><strong>{mapResult.matched}</strong> mapped</span><span><strong>{mapResult.review}</strong> need review</span><span><strong>{mapResult.unmatched}</strong> truly unmatched</span>{!!mapResult.failed&&<span><strong>{mapResult.failed}</strong> lookup failures queued</span>}<span><strong>{panelData?.queued||0}</strong> remaining</span></div><small>This result stays here until you run another batch or leave the page.</small></div>}
         {!!panelData?.unmatched && <div className="warning"><AlertTriangle/><div><b>{panelData.unmatched} cards could not be matched automatically</b><p>They were set aside so the next batch can continue. They are not sent to Mana Pool.</p></div></div>}
+        {!!panelData?.unresolvedDetails?.length && <div className="mapping-review">
+          <div className="modal-actions"><h3>Unmatched mapping log</h3><button className="secondary" onClick={downloadUnmatchedLog}>Download CSV log</button></div>
+          <p className="bodycopy">This shows exactly how each eBay title was interpreted. Incorrect parsed values identify which part of the title prevented the match.</p>
+          {panelData.unresolvedDetails.map((item:any)=><details className="mapping-card" key={`log-${item.id}`}>
+            <summary><b>{item.title}</b><small>{item.reason}</small></summary>
+            <div className="mapping-options"><span><b>Parsed card</b><small>{item.parsed_name || "Missing"}</small></span><span><b>Collector number</b><small>{item.parsed_number || "Missing"}</small></span><span><b>Set</b><small>{item.parsed_set || "Missing"}</small></span><span><b>Finish</b><small>{item.parsed_finish}</small></span></div>
+          </details>)}
+        </div>}
         {!!panelData?.review?.length && <div className="mapping-review">
           <h3>Matches needing your review</h3>
           {panelData.review.map((listing:any)=><article className="mapping-card" key={listing.id}>
