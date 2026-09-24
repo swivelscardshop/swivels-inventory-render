@@ -12,6 +12,7 @@ async function overview() {
     mapped: mapped.filter((x:any) => x.scryfall_id).length,
     unmapped: mapped.filter((x:any) => !x.scryfall_id).length,
     review: mapped.filter((x:any) => x.manapool_mapping_status === "review").slice(0, 30),
+    reviewCount: mapped.filter((x:any) => x.manapool_mapping_status === "review").length,
     queued: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status === "pending").length,
     unmatched: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status === "unmatched").length,
   };
@@ -26,14 +27,30 @@ export async function POST(request: Request) {
   try {
     const body:any = await request.json().catch(() => ({}));
     const mode = body?.mode || "preview";
+    if (mode === "retry-unresolved") {
+      await db("marketplace_listings?game=eq.magic&ebay_status=eq.active&scryfall_id=is.null&manapool_mapping_status=in.(review,unmatched)", {
+        method:"PATCH", body:JSON.stringify({ manapool_mapping_status:"pending", manapool_mapping_candidates:[] }),
+      });
+      return NextResponse.json({ok:true,overview:await overview()});
+    }
     if (mode === "map") {
       const pending = await dbAll("marketplace_listings?select=id,title,card_name,card_number,set_name,language,finish,condition_name&game=eq.magic&ebay_status=eq.active&scryfall_id=is.null&manapool_mapping_status=eq.pending&order=title.asc", 40);
       let matched = 0, review = 0, unmatched = 0, failed = 0;
       for (const row of pending.slice(0, 40)) {
         try {
           const candidates = await findScryfallCandidates(row);
-          const exact = candidates.filter((candidate) => row.set_name && candidate.set_name.toLowerCase() === String(row.set_name).toLowerCase());
-          const chosen = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+          const normalize = (value:string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g," ").trim();
+          const normalizedTitle = normalize(row.title);
+          const titleMatches = candidates.filter((candidate) => {
+            const setName = normalize(candidate.set_name);
+            const setAlias = normalize(String(candidate.set_name).split(":")[0]);
+            const number = String(candidate.collector_number || "").replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+            const numberInTitle = number && new RegExp(`(^|[^a-z0-9])${number}([^a-z0-9]|$)`,`i`).test(row.title);
+            const setInTitle = (setName && normalizedTitle.includes(setName)) || (setAlias.length >= 4 && normalizedTitle.includes(setAlias));
+            return Boolean(setInTitle && numberInTitle);
+          });
+          const exact = candidates.filter((candidate) => row.set_name && normalize(candidate.set_name) === normalize(String(row.set_name)) && (!row.card_number || normalize(candidate.collector_number) === normalize(String(row.card_number))));
+          const chosen = titleMatches.length === 1 ? titleMatches[0] : exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
           if (chosen) {
             await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:chosen.id, manapool_mapping_status:"mapped", manapool_mapping_candidates:candidates, ...manaPoolVariant(row) }) });
             matched++;

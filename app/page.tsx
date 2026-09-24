@@ -779,6 +779,14 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
       setPanelData(b.overview); notify(`Mapped ${listing.title} to ${candidate.name}.`);
     } catch(e){notify(e instanceof Error?e.message:"Mapping confirmation failed");} finally{setWorking(false);}
   };
+  const retryUnresolved = async () => {
+    setWorking(true);
+    try {
+      const r=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"retry-unresolved"})});
+      const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Could not reset unresolved cards");
+      setPanelData(b.overview); setMapResult(null); notify("Unresolved cards are queued for a fresh mapping check.");
+    } catch(e){notify(e instanceof Error?e.message:"Could not reset unresolved cards");} finally{setWorking(false);}
+  };
   return <div className="stack">
     <Intro title="Mana Pool connection" text="Sync active eBay Magic: The Gathering individual-card listings. Sealed packs, boxes, decks, and products remain excluded." action={<span className={panelData?.configured?"healthy":"count"}>{panelData?.configured?"Connected":"Token required"}</span>} />
     {loading ? <Empty text="Loading Mana Pool status…"/> : <>
@@ -800,7 +808,10 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
       <section className="panel">
         <Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic singles"/>
         <p className="bodycopy">Match eBay Magic singles through Scryfall, which Mana Pool accepts directly. Each run checks up to 40 cards. Ambiguous matches stay here for your review; nothing is sent to Mana Pool yet.</p>
-        <div className="modal-actions"><button className="primary" disabled={working||!panelData?.configured||!panelData?.queued} onClick={mapNext}>{working?"Checking cards…":panelData?.queued?`Map next ${Math.min(40,panelData.queued)} cards`:"All queued cards checked"}</button></div>
+        <div className="modal-actions">
+          {!!((panelData?.unmatched||0)+(panelData?.reviewCount||0)) && <button className="secondary" disabled={working} onClick={retryUnresolved}>Recheck {(panelData?.unmatched||0)+(panelData?.reviewCount||0)} unresolved cards</button>}
+          <button className="primary" disabled={working||!panelData?.configured||!panelData?.queued} onClick={mapNext}>{working?"Checking cards…":panelData?.queued?`Map next ${Math.min(40,panelData.queued)} cards`:"All queued cards checked"}</button>
+        </div>
         {mapResult && <div className="mapping-summary"><b>Last mapping batch</b><div><span><strong>{mapResult.processed}</strong> checked</span><span><strong>{mapResult.matched}</strong> mapped</span><span><strong>{mapResult.review}</strong> need review</span><span><strong>{mapResult.unmatched}</strong> unmatched</span><span><strong>{panelData?.queued||0}</strong> remaining</span></div><small>This result stays here until you run another batch or leave the page.</small></div>}
         {!!panelData?.unmatched && <div className="warning"><AlertTriangle/><div><b>{panelData.unmatched} cards could not be matched automatically</b><p>They were set aside so the next batch can continue. They are not sent to Mana Pool.</p></div></div>}
         {!!panelData?.review?.length && <div className="mapping-review">
