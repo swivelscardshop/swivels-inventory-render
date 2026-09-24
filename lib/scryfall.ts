@@ -16,21 +16,43 @@ export type ScryfallCandidate = {
 
 const clean = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
 
-function titleIdentity(row: ListingIdentity) {
-  const slashNumber = row.title.match(/\b([A-Z]?\d{1,4}[a-z]?)\s*\/\s*\d{1,4}\b/i);
-  const number = String(row.card_number || slashNumber?.[1] || "").trim();
+export function titleIdentity(row: ListingIdentity) {
+  const title = String(row.title || "").replace(/\s+/g, " ").trim();
+  const gameMarker = title.search(/\s+(?:Magic\s*:\s*The Gathering|Magic The Gathering|MTG)\b/i);
+  const identitySection = (gameMarker >= 0 ? title.slice(0, gameMarker) : title).trim();
+  const finishMatch = identitySection.match(/\s+(Etched Foil|Non[- ]?Foil|Foil)\s*$/i);
+  const beforeFinish = (finishMatch ? identitySection.slice(0, finishMatch.index) : identitySection).trim();
+  const slashNumber = beforeFinish.match(/\b([A-Z]?\d{1,4}[a-z]?)\s*\/\s*\d{1,4}\b/i);
+  // Magic titles use a plain collector number between the card name and set
+  // name. eBay item specifics are preferred when present; otherwise locate
+  // that positional number in the title.
+  const plainNumbers = [...beforeFinish.matchAll(/(?:^|\s)([A-Z]?\d{1,4}[a-z]?)(?=\s|$)/gi)];
+  const positional = slashNumber || plainNumbers.find((match) => {
+    const start = match.index == null ? -1 : match.index + match[0].length - match[1].length;
+    return start > 1 && beforeFinish.slice(start + match[1].length).trim().length > 1;
+  });
+  const number = String(row.card_number || positional?.[1] || "").split("/")[0].trim();
+  const numberIndex = positional?.index == null ? -1 : positional.index + positional[0].length - positional[1].length;
   let name = String(row.card_name || "").trim();
-  if (!name && slashNumber?.index != null) name = row.title.slice(0, slashNumber.index).trim();
+  if (!name && numberIndex >= 0) name = beforeFinish.slice(0, numberIndex).trim();
   if (!name) {
-    name = row.title
+    name = title
       .replace(/\b(Magic: The Gathering|Magic The Gathering|MTG|TCG|English|Japanese|Near Mint|Lightly Played|Moderately Played|Heavily Played|Damaged|NM|LP|MP|HP|DMG|Non[- ]?Foil|Foil|Etched Foil)\b/gi, " ")
       .replace(/\s+/g, " ").trim();
   }
-  return { name, number };
+  const inferredSet = numberIndex >= 0
+    ? beforeFinish.slice(numberIndex + String(positional?.[1] || "").length).trim()
+    : "";
+  return {
+    name,
+    number,
+    setName: String(row.set_name || inferredSet || "").trim(),
+    finish: finishMatch && !/^non/i.test(finishMatch[1]) ? finishMatch[1] : "Non-Foil",
+  };
 }
 
 export async function findScryfallCandidates(row: ListingIdentity): Promise<ScryfallCandidate[]> {
-  const { name, number } = titleIdentity(row);
+  const { name, number, setName } = titleIdentity(row);
   if (!name || name.length < 2) return [];
   const terms = [`!\"${name.replace(/\"/g, "")}\"`, number ? `number:${number}` : ""].filter(Boolean).join(" ");
   const headers = { "User-Agent": "SwivelsInventory/1.10.8", Accept: "application/json" };
@@ -52,7 +74,7 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     body = named.prints_search_uri ? await get(String(named.prints_search_uri)) : { data:[named] };
   }
   const title = clean(row.title);
-  const setHint = clean(String(row.set_name || ""));
+  const setHint = clean(setName);
   let sourceCards = body?.data || [];
   if (number) sourceCards = sourceCards.filter((card:any) => clean(String(card.collector_number || "")) === clean(number));
   const cards = sourceCards.map((card: any) => ({
@@ -63,7 +85,9 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
   return cards.sort((a, b) => {
     const score = (candidate: ScryfallCandidate) => {
       const setName = clean(candidate.set_name);
-      return (setHint && setName === setHint ? 4 : 0) + (setName && title.includes(setName) ? 3 : 0) + (number && clean(candidate.collector_number) === clean(number) ? 2 : 0);
+      const setAlias = clean(candidate.set_name.split(":")[0]);
+      const hintMatches = setHint && (setName === setHint || setAlias === setHint || setName.includes(setHint) || setHint.includes(setAlias));
+      return (hintMatches ? 6 : 0) + (setName && title.includes(setName) ? 3 : 0) + (number && clean(candidate.collector_number) === clean(number) ? 2 : 0);
     };
     return score(b) - score(a);
   }).slice(0, 8);

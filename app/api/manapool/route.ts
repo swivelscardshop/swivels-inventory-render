@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db, dbAll } from "@/lib/supabase";
 import { getManaPoolOrder, getManaPoolOrders, manaPoolConfigured, manaPoolPrice, manaPoolSyncEnabled, setManaPoolInventory } from "@/lib/manapool";
-import { findScryfallCandidates, manaPoolVariant } from "@/lib/scryfall";
+import { findScryfallCandidates, manaPoolVariant, titleIdentity } from "@/lib/scryfall";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
@@ -41,12 +41,15 @@ export async function POST(request: Request) {
           const candidates = await findScryfallCandidates(row);
           const normalize = (value:string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g," ").trim();
           const normalizedTitle = normalize(row.title);
+          const parsed = titleIdentity(row);
           const titleMatches = candidates.filter((candidate) => {
             const setName = normalize(candidate.set_name);
             const setAlias = normalize(String(candidate.set_name).split(":")[0]);
+            const parsedSet = normalize(parsed.setName);
             const number = String(candidate.collector_number || "").replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
             const numberInTitle = number && new RegExp(`(^|[^a-z0-9])${number}([^a-z0-9]|$)`,`i`).test(row.title);
-            const setInTitle = (setName && normalizedTitle.includes(setName)) || (setAlias.length >= 4 && normalizedTitle.includes(setAlias));
+            const setInTitle = (setName && normalizedTitle.includes(setName)) || (setAlias.length >= 4 && normalizedTitle.includes(setAlias)) ||
+              (parsedSet.length >= 2 && (setName === parsedSet || setAlias === parsedSet || setName.includes(parsedSet) || parsedSet.includes(setAlias)));
             return Boolean(setInTitle && numberInTitle);
           });
           const exact = candidates.filter((candidate) => row.set_name && normalize(candidate.set_name) === normalize(String(row.set_name)) && (!row.card_number || normalize(candidate.collector_number) === normalize(String(row.card_number))));
