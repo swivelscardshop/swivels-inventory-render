@@ -1,7 +1,7 @@
 const baseUrl = "https://manapool.com/api/v1";
 
 export function manaPoolConfigured() {
-  return Boolean(process.env.MANAPOOL_API_TOKEN);
+  return Boolean(process.env.MANAPOOL_API_TOKEN && process.env.MANAPOOL_API_EMAIL);
 }
 
 export function manaPoolSyncEnabled() {
@@ -10,12 +10,15 @@ export function manaPoolSyncEnabled() {
 
 export async function manaPool(path: string, init: RequestInit = {}) {
   const token = process.env.MANAPOOL_API_TOKEN;
-  if (!token) throw new Error("MANAPOOL_API_TOKEN is missing in Render");
+  const email = process.env.MANAPOOL_API_EMAIL;
+  if (!token || !email) throw new Error("MANAPOOL_API_TOKEN and MANAPOOL_API_EMAIL are required in Render");
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     cache: "no-store",
     headers: {
       Authorization: `Bearer ${token}`,
+      "X-ManaPool-Access-Token": token,
+      "X-ManaPool-Email": email,
       Accept: "application/json",
       "Content-Type": "application/json",
       ...(init.headers || {}),
@@ -28,7 +31,34 @@ export async function manaPool(path: string, init: RequestInit = {}) {
 }
 
 export function manaPoolPrice(lowestCents: number) {
-  return Math.max(40, Math.ceil(Math.max(0, lowestCents) * 1.3));
+  const lowest = Math.max(0, Math.round(lowestCents));
+  return lowest <= 40 ? 40 : Math.ceil(lowest * 1.3);
+}
+
+export type ManaPoolVariantPrice = {
+  scryfall_id: string;
+  language_id: string;
+  condition_id: string | null;
+  finish_id: string | null;
+  low_price: number;
+  available_quantity: number;
+};
+
+export async function getManaPoolVariantPrices(): Promise<ManaPoolVariantPrice[]> {
+  const body = await manaPool("/prices/variants");
+  if (!Array.isArray(body?.data)) throw new Error("Mana Pool returned an invalid variant price list");
+  return body.data;
+}
+
+export function manaPoolVariantPriceKey(value: {
+  scryfall_id: string;
+  language_id?: string | null;
+  condition_id?: string | null;
+  finish_id?: string | null;
+}) {
+  return [value.scryfall_id, value.language_id || "EN", value.condition_id || "NM", value.finish_id || "NF"]
+    .map((part) => String(part).trim().toUpperCase())
+    .join("|");
 }
 
 export async function getManaPoolOrders() {

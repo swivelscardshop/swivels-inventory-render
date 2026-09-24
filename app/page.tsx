@@ -807,13 +807,22 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
       </div>
       <section className="panel">
         <Title k="SAFE SYNC" t="Review before live changes" />
-        <p className="bodycopy">Price is the greater of $0.40 or 130% of the stored Mana Pool lowest price. Only reviewed Scryfall mappings are sent.</p>
+        <p className="bodycopy">Each exact card variant uses the current lowest Mana Pool listing: $0.40 when the lowest price is $0.40 or less; otherwise the lowest price plus 30%. Only reviewed Scryfall mappings are sent.</p>
         <div className="modal-actions">
           <button className="secondary" disabled={working||!panelData?.configured} onClick={()=>run("preview")}>Preview changes</button>
           <button className="secondary" disabled={working||!panelData?.configured} onClick={orders}>Import Mana Pool orders</button>
           <button className="primary" disabled={working||!panelData?.configured||!panelData?.enabled} onClick={()=>run("sync")}>Sync live inventory</button>
         </div>
-        {preview && <div className="warning"><Check/><div><b>{preview.total} mapped listings in preview</b><p>{preview.enabled?"Live sync is enabled.":"Live sync is still disabled in Render."}</p></div></div>}
+        {preview && <>
+          <div className={preview.missing?"warning":"mapping-summary"}><Check/><div><b>{preview.total} of {preview.mapped} mapped listings have an exact market price</b><p>{preview.missing?`${preview.missing} cards were blocked because Mana Pool has no exact matching listing price.`:preview.enabled?"Live sync is enabled.":"Live sync is still disabled in Render."}</p></div></div>
+          {!!preview.preview?.length && <div className="mapping-review">
+            <h3>Pricing preview</h3>
+            <p className="bodycopy">Showing the first {preview.preview.length} cards. Prices are in U.S. dollars.</p>
+            {preview.preview.slice(0,20).map((item:any,index:number)=><div className="mapping-card" key={`${item.title}-${index}`}>
+              <b>{item.title}</b><small>{item.condition_id} · {item.finish_id} · Qty {item.quantity} · Lowest ${(item.lowest_cents/100).toFixed(2)} → Your price ${(item.price_cents/100).toFixed(2)}</small>
+            </div>)}
+          </div>}
+        </>}
       </section>
       <section className="panel">
         <Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic singles"/>

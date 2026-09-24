@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, dbAll } from "@/lib/supabase";
-import { getManaPoolOrder, getManaPoolOrders, manaPoolConfigured, manaPoolPrice, manaPoolSyncEnabled, setManaPoolInventory } from "@/lib/manapool";
+import { getManaPoolOrder, getManaPoolOrders, getManaPoolVariantPrices, manaPoolConfigured, manaPoolPrice, manaPoolSyncEnabled, manaPoolVariantPriceKey, setManaPoolInventory } from "@/lib/manapool";
 import { collectorKey, findScryfallCandidates, manaPoolVariant, titleIdentity } from "@/lib/scryfall";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -67,8 +67,12 @@ export async function POST(request: Request) {
               (parsedSet.length >= 2 && (setName === parsedSet || setAlias === parsedSet || setName.includes(parsedSet) || parsedSet.includes(setAlias)));
             return Boolean(setInTitle && numberInTitle);
           });
+          const parsedExact = candidates.filter((candidate) =>
+            normalize(candidate.set_name) === normalize(parsed.setName) &&
+            collectorKey(candidate.collector_number) === collectorKey(parsed.number)
+          );
           const exact = candidates.filter((candidate) => row.set_name && normalize(candidate.set_name) === normalize(String(row.set_name)) && (!row.card_number || collectorKey(candidate.collector_number) === collectorKey(row.card_number)));
-          const chosen = titleMatches.length === 1 ? titleMatches[0] : exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+          const chosen = parsedExact.length === 1 ? parsedExact[0] : titleMatches.length === 1 ? titleMatches[0] : exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
           if (chosen) {
             await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:chosen.id, manapool_mapping_status:"mapped", manapool_mapping_candidates:candidates, ...manaPoolVariant(row) }) });
             matched++;
@@ -94,14 +98,39 @@ export async function POST(request: Request) {
       await db(`marketplace_listings?id=eq.${encodeURIComponent(id)}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:scryfallId, manapool_mapping_status:"mapped", ...manaPoolVariant(rows[0]) }) });
       return NextResponse.json({ok:true,overview:await overview()});
     }
-    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_quantity,scryfall_id,language_id,finish_id,condition_id,manapool_lowest_cents&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
-    const updates = listings.map((x:any) => ({
-      scryfall_id: String(x.scryfall_id), language_id:x.language_id || "EN", finish_id:x.finish_id || "NF", condition_id:x.condition_id || "NM", quantity: Number(x.ebay_quantity || 0),
-      price_cents: manaPoolPrice(Number(x.manapool_lowest_cents || 0)), custom_external_id: String(x.ebay_listing_id),
+    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_quantity,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+    const marketPrices = await getManaPoolVariantPrices();
+    const lowestByVariant = new Map<string, number>();
+    for (const price of marketPrices) {
+      const cents = Number(price.low_price);
+      if (!Number.isFinite(cents) || cents < 0) continue;
+      const key = manaPoolVariantPriceKey(price);
+      const previous = lowestByVariant.get(key);
+      if (previous === undefined || cents < previous) lowestByVariant.set(key, cents);
+    }
+    const priced = listings.flatMap((x:any) => {
+      const key = manaPoolVariantPriceKey({
+        scryfall_id:String(x.scryfall_id), language_id:x.language_id || "EN",
+        finish_id:x.finish_id || "NF", condition_id:x.condition_id || "NM",
+      });
+      const lowestCents = lowestByVariant.get(key);
+      if (lowestCents === undefined) return [];
+      return [{ listing:x, lowestCents, update:{
+        scryfall_id:String(x.scryfall_id), language_id:x.language_id || "EN", finish_id:x.finish_id || "NF", condition_id:x.condition_id || "NM",
+        quantity:Number(x.ebay_quantity || 0), price_cents:manaPoolPrice(lowestCents), custom_external_id:String(x.ebay_listing_id),
+      }}];
+    });
+    const pricedIds = new Set(priced.map((x:any) => x.listing.id));
+    const missing = listings.filter((x:any) => !pricedIds.has(x.id));
+    const previewRows = priced.slice(0, 100).map((x:any) => ({
+      title:x.listing.title, lowest_cents:x.lowestCents, price_cents:x.update.price_cents,
+      quantity:x.update.quantity, condition_id:x.update.condition_id, finish_id:x.update.finish_id,
     }));
-    if (mode === "preview") return NextResponse.json({ preview: updates.slice(0, 100), total: updates.length, enabled: manaPoolSyncEnabled() });
+    if (mode === "preview") return NextResponse.json({ preview:previewRows, total:priced.length, missing:missing.length, mapped:listings.length, enabled:manaPoolSyncEnabled() });
+    if (missing.length) throw new Error(`${missing.length} mapped cards have no exact Mana Pool market price. Run Preview changes and review them before live sync.`);
+    const updates = priced.map((x:any) => x.update);
     const result = await setManaPoolInventory(updates);
-    for (const row of listings) await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ manapool_quantity: row.ebay_quantity, manapool_price_cents: manaPoolPrice(Number(row.manapool_lowest_cents || 0)), last_manapool_sync_at:new Date().toISOString() }) });
+    for (const row of priced) await db(`marketplace_listings?id=eq.${row.listing.id}`, { method:"PATCH", body:JSON.stringify({ manapool_quantity:row.listing.ebay_quantity, manapool_lowest_cents:row.lowestCents, manapool_price_cents:row.update.price_cents, last_manapool_sync_at:new Date().toISOString() }) });
     return NextResponse.json({ ok:true, updated:updates.length, result });
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Mana Pool sync failed" }, { status: 500 }); }
 }

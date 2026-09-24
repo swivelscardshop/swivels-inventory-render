@@ -113,11 +113,11 @@ For local OAuth, create a separate RuName whose accepted URL is
 
 1. In Supabase SQL Editor, run `supabase/v1.9.0-manapool.sql` once.
 2. In Mana Pool, open **API Integration Settings** and create an access token.
-3. In Render, add `MANAPOOL_API_TOKEN`. Keep `MANAPOOL_SYNC_ENABLED=false` initially.
+3. In Render, add `MANAPOOL_API_TOKEN` and the Mana Pool account email as `MANAPOOL_API_EMAIL`. Keep `MANAPOOL_SYNC_ENABLED=false` initially.
 4. Redeploy, open the **Mana Pool** tab, and click **Map next 40 cards** until the queue is complete.
 5. Review any ambiguous printings shown by the app. Mapping uses Scryfall IDs accepted directly by Mana Pool; a TCGPlayer account or SKU is not required.
 6. Use **Preview changes**. After the preview is correct, set `MANAPOOL_SYNC_ENABLED=true` in Render and redeploy.
 
-Pricing uses `max(40 cents, ceil(lowest Mana Pool price × 1.30))`. Mana Pool orders can be imported from the Mana Pool tab and appear on the Orders page with their allocated Supabase location. Confirming shipment sends fulfillment to Mana Pool, then removes the allocated physical SKU from Supabase.
+Pricing uses the exact Scryfall ID, language, condition, and finish. A lowest market price of 40 cents or less is listed at 40 cents; any higher market price is multiplied by 1.30 and rounded up to the next cent. Mana Pool orders can be imported from the Mana Pool tab and appear on the Orders page with their allocated Supabase location. Confirming shipment sends fulfillment to Mana Pool, then removes the allocated physical SKU from Supabase.
 
 Live sync is intentionally disabled by default. Automatic matches must be unique; uncertain printings remain in the review list and are never sent until confirmed.

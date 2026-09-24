@@ -26,5 +26,7 @@ services:
         generateValue: true
       - key: MANAPOOL_API_TOKEN
         sync: false
+      - key: MANAPOOL_API_EMAIL
+        sync: false
       - key: MANAPOOL_SYNC_ENABLED
         value: "false"
