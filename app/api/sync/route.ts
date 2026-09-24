@@ -29,6 +29,16 @@ export async function POST() {
       });
     }
 
+    // PostgREST has intermittently preserved the old `game` value while
+    // merging existing listing rows. Apply the eBay classification explicitly
+    // so Mana Pool reads the same set reported by the import response.
+    const magicListingIds = listings.filter((listing) => listing.game === "magic").map((listing) => listing.ebay_listing_id);
+    for (const group of chunks(magicListingIds, 100)) {
+      await db(`marketplace_listings?ebay_listing_id=in.(${group.join(",")})`, {
+        method: "PATCH", body: JSON.stringify({ game: "magic", updated_at: new Date().toISOString() }),
+      });
+    }
+
     const stored: any[] = [];
     const ids = listings.map(x => x.ebay_listing_id);
     for (const group of chunks(ids, 150)) {
