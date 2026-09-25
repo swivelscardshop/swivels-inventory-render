@@ -790,7 +790,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
   const enableWebhooks = async () => {
     if (!(await confirmAction({title:"Enable live marketplace webhooks?",message:"eBay and Mana Pool will send listing and sale events directly to this Render service. Sales will update the other marketplace even when your computer is off.",confirmLabel:"Enable live webhooks"}))) return;
     setWorking(true);
-    try { const r=await fetch("/api/webhooks/setup",{method:"POST"});const b:any=await r.json();if(!r.ok)throw new Error(b.error||"Webhook setup failed");setWebhooks({configured:true,baseUrl:b.baseUrl});notify("Live eBay and Mana Pool webhooks are enabled."); }
+    try { const r=await fetch("/api/webhooks/setup",{method:"POST"});const b:any=await r.json();if(!r.ok)throw new Error(b.error||"Webhook setup failed");setWebhooks(b);notify("eBay and Mana Pool independently confirmed their live webhook connections."); }
     catch(e){notify(e instanceof Error?e.message:"Webhook setup failed");}finally{setWorking(false);}
   };
   const mapNext = async () => {
@@ -889,11 +889,16 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
       <section className="panel">
         <Title k="LIVE CLOUD SYNC" t="Run automatically while your computer is off" />
         <p className="bodycopy">Webhooks send new eBay listings and marketplace sales directly to this Render service. eBay remains the quantity master, and Supabase prevents the same sale from being processed twice.</p>
+        <div className="mapping-summary"><div>
+          <span><strong className={webhooks?.ebay?.live?"healthy":"count"}>{webhooks?.ebay?.live?"LIVE":"NOT VERIFIED"}</strong> eBay sales and listings</span>
+          <span><strong className={webhooks?.manaPoolLive?"healthy":"count"}>{webhooks?.manaPoolLive?"LIVE":"NOT VERIFIED"}</strong> Mana Pool orders</span>
+        </div><small>Each marketplace is verified separately. The overall status is live only when both services confirm their subscription.</small></div>
         <div className="modal-actions">
-          <span className={webhooks?.configured?"healthy":"count"}>{webhooks?.configured?"Webhooks enabled":"Setup required"}</span>
-          <button className="primary" disabled={working||!panelData?.configured||webhooks?.configured} onClick={enableWebhooks}>{webhooks?.configured?"Live webhooks enabled":"Enable live webhooks"}</button>
+          <span className={webhooks?.configured?"healthy":"count"}>{webhooks?.configured?"Both connections verified":"Setup or repair required"}</span>
+          <button className="primary" disabled={working||!panelData?.configured||webhooks?.configured} onClick={enableWebhooks}>{webhooks?.configured?"Live webhooks verified":"Enable / repair live webhooks"}</button>
         </div>
         {webhooks?.baseUrl&&<p className="bodycopy">Receiving events at {webhooks.baseUrl}</p>}
+        {webhooks?.lastEbayWebhookAt&&<p className="bodycopy">Last eBay event received {new Date(webhooks.lastEbayWebhookAt).toLocaleString()} · {webhooks.lastEbayWebhookResult||"received"}</p>}
       </section>
       <section className="panel">
         <Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic singles"/>

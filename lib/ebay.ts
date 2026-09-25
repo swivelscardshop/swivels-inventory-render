@@ -268,17 +268,41 @@ async function tradingCall(callName: string, xml: string) {
 
 export async function configureEbayWebhooks(callbackUrl: string) {
   if (!/^https:\/\//i.test(callbackUrl)) throw new Error("eBay webhook URL must use HTTPS");
-  return tradingCall("SetNotificationPreferences", `<?xml version="1.0" encoding="utf-8"?>
+  // eBay requires the seller's event subscriptions and the application's
+  // delivery URL to be set in separate calls.
+  await tradingCall("SetNotificationPreferences", `<?xml version="1.0" encoding="utf-8"?>
     <SetNotificationPreferencesRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-      <ApplicationDeliveryPreferences>
-        <ApplicationEnable>Enable</ApplicationEnable>
-        <ApplicationURL>${xmlEscape(callbackUrl)}</ApplicationURL>
-      </ApplicationDeliveryPreferences>
       <UserDeliveryPreferenceArray>
         <NotificationEnable><EventType>FixedPriceTransaction</EventType><EventEnable>Enable</EventEnable></NotificationEnable>
         <NotificationEnable><EventType>ItemListed</EventType><EventEnable>Enable</EventEnable></NotificationEnable>
       </UserDeliveryPreferenceArray>
     </SetNotificationPreferencesRequest>`);
+  await tradingCall("SetNotificationPreferences", `<?xml version="1.0" encoding="utf-8"?>
+    <SetNotificationPreferencesRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+      <ApplicationDeliveryPreferences>
+        <ApplicationEnable>Enable</ApplicationEnable>
+        <ApplicationURL>${xmlEscape(callbackUrl)}</ApplicationURL>
+        <PayloadVersion>1423</PayloadVersion>
+      </ApplicationDeliveryPreferences>
+    </SetNotificationPreferencesRequest>`);
+  return getEbayWebhookStatus(callbackUrl);
+}
+
+const xmlValue = (value:any) => String(value?.["#text"] ?? value ?? "");
+
+export async function getEbayWebhookStatus(expectedUrl?:string) {
+  const [application,user]=await Promise.all([
+    tradingCall("GetNotificationPreferences",`<?xml version="1.0" encoding="utf-8"?><GetNotificationPreferencesRequest xmlns="urn:ebay:apis:eBLBaseComponents"><PreferenceLevel>Application</PreferenceLevel></GetNotificationPreferencesRequest>`),
+    tradingCall("GetNotificationPreferences",`<?xml version="1.0" encoding="utf-8"?><GetNotificationPreferencesRequest xmlns="urn:ebay:apis:eBLBaseComponents"><PreferenceLevel>User</PreferenceLevel></GetNotificationPreferencesRequest>`),
+  ]);
+  const applicationUrl=xmlValue(application?.ApplicationDeliveryPreferences?.ApplicationURL);
+  const applicationEnabled=xmlValue(application?.ApplicationDeliveryPreferences?.ApplicationEnable).toLowerCase()==="enable";
+  const preferences=arr<any>(user?.UserDeliveryPreferenceArray?.NotificationEnable);
+  const enabled=new Map(preferences.map((x:any)=>[xmlValue(x.EventType),xmlValue(x.EventEnable).toLowerCase()==="enable"]));
+  const fixedPriceTransaction=enabled.get("FixedPriceTransaction")===true;
+  const itemListed=enabled.get("ItemListed")===true;
+  const urlMatches=!expectedUrl||applicationUrl.replace(/\/$/,"")===expectedUrl.replace(/\/$/,"");
+  return {live:applicationEnabled&&urlMatches&&fixedPriceTransaction&&itemListed,applicationEnabled,applicationUrl,urlMatches,fixedPriceTransaction,itemListed};
 }
 
 export async function reviseListingQuantity(itemId: string, quantity: number) {
