@@ -183,6 +183,40 @@ export default function Home() {
     fetch("/api/manapool", { cache: "no-store" }).then(r => r.json()).then(setManaPool).catch(e => setMessage(e.message)).finally(() => setLoading(false));
   }, [view, status.ready]);
   useEffect(() => {
+    if (!status.ready || !status.ebayConfigured) return;
+    let stopped = false;
+    const refreshFromEbay = async (showProgress = false) => {
+      if (document.visibilityState !== "visible") return;
+      if (showProgress) setMessage("Checking eBay for new listings and orders…");
+      try {
+        const response = await fetch("/api/sync/automatic", {
+          method: "POST",
+          cache: "no-store",
+        });
+        const result: any = await response.json();
+        if (!response.ok || result?.ok === false) throw new Error(result?.error || "Automatic eBay sync failed");
+        if (stopped) return;
+        await load();
+        if (view === "orders") await loadOrders();
+        if (result.automatic) {
+          setMessage(`eBay updated: ${Number(result.listings || 0).toLocaleString()} active listings.`);
+        } else if (showProgress) {
+          setMessage("");
+        }
+      } catch (error) {
+        if (!stopped && showProgress) {
+          setMessage(error instanceof Error ? error.message : "Automatic eBay sync failed");
+        }
+      }
+    };
+    refreshFromEbay(true);
+    const timer = window.setInterval(() => refreshFromEbay(false), 5 * 60 * 1000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [status.ready, status.ebayConfigured, load, loadOrders, view]);
+  useEffect(() => {
     // Marketplace webhooks update the hosted database even when no browser is
     // open. While the app is open, refresh the visible data automatically so
     // the user never has to click Import eBay just to see webhook changes.
@@ -261,16 +295,6 @@ export default function Home() {
             </button>
           ))}
         </nav>
-        <div className="master">
-          <Store />
-          <div>
-            <small>MASTER SOURCE</small>
-            <b>eBay</b>
-            <em>
-              {status.ebayConfigured ? "● OAuth connected" : "○ Not connected"}
-            </em>
-          </div>
-        </div>
         <div className="profile">
           <span>SC</span>
           <div>
@@ -408,100 +432,33 @@ function Intro({
     </div>
   );
 }
-function Metric({ n, t, d }: { n: number | string; t: string; d: string }) {
+function Metric({ n, t, d }: { n: number | string; t: string; d?: string }) {
   return (
     <article>
       <Store />
       <div>
         <small>{t}</small>
         <b>{typeof n === "number" ? n.toLocaleString() : n}</b>
-        <em>{d}</em>
+        {d && <em>{d}</em>}
       </div>
     </article>
   );
 }
 function Dashboard({ s, go }: { s: Status; go: (v: View) => void }) {
-  const connected = s.ready && s.ebayConfigured;
   return (
     <>
-      <Intro
-        title="eBay is the master. Supabase stores the working catalog."
-        text="All numbers below come from your connected Supabase project."
-        action={
-          <span className={connected ? "healthy" : "count"}>
-            {connected ? (
-              <>
-                <Check /> Ready for eBay import
-              </>
-            ) : (
-              "Setup incomplete"
-            )}
-          </span>
-        }
-      />
       <div className="metrics">
-        <Metric
-          n={s.listings || 0}
-          t="Active eBay listings"
-          d="Imported master catalog"
-        />
-        <Metric
-          n={s.physical || 0}
-          t="Physical SKU locations"
-          d="Stored in Supabase"
-        />
-        <Metric
-          n={s.orders || 0}
-          t="Ready to pull"
-          d="Open, non-refunded orders"
-        />
-        <Metric n={s.issues || 0} t="Needs review" d="Reconciliation issues" />
-      </div>
-      <div className="grid">
-        <section className="panel">
-          <Title
-            k="REAL DATA STATUS"
-            t={
-              s.lastSync
-                ? "Latest import completed"
-                : "No eBay data imported yet"
-            }
-          />
-          <Connection
-            name="eBay"
-            detail={
-              s.ebayConfigured
-                ? "OAuth refresh token stored securely"
-                : "Use Connect eBay to authorize"
-            }
-            ok={s.ebayConfigured}
-          />
-          <Connection
-            name="Supabase"
-            detail={s.ready ? "Schema connected" : "Not ready"}
-            ok={s.ready}
-          />
-        </section>
-        <section className="panel links">
-          <Title k="CONTROLLED EBAY ACCESS" t="Normal import is read-only" />
-          <p className="bodycopy">
-            Import only reads eBay. Duplicate Center and CSV Intake change a
-            live listing only after you review the result and confirm the
-            action.
-          </p>
-          {!s.ebayConfigured && (
-            <a className="primary" href="/api/ebay/connect">
-              Connect eBay
-            </a>
-          )}
-        </section>
+        <Metric n={s.listings || 0} t="Active eBay listings" />
+        <Metric n={s.physical || 0} t="Card locations" />
+        <Metric n={s.orders || 0} t="Ready to pull" />
+        <Metric n={s.issues || 0} t="Needs review" />
       </div>
       <section className="panel">
-        <Title k="FULFILLMENT" t="Recent orders" on={() => go("orders")} />
+        <Title k="" t="Recent orders" on={() => go("orders")} />
         {(s.orderRows || []).length ? (
           (s.orderRows || []).map((o: any) => <Mini key={o.id} order={o} />)
         ) : (
-          <Empty text="No real open orders have been imported." />
+          <Empty text="No open orders." />
         )}
       </section>
     </>
@@ -531,7 +488,7 @@ function Title({ k, t, on }: { k: string; t: string; on?: () => void }) {
   return (
     <div className="title">
       <div>
-        <small>{k}</small>
+        {k && <small>{k}</small>}
         <h3>{t}</h3>
       </div>
       {on && <button onClick={on}>Review all</button>}
