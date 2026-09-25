@@ -316,22 +316,37 @@ export async function endListing(itemId: string) {
 }
 
 export async function getOpenOrders(token: string) {
-  // Only orders that have not begun fulfillment belong in Ready to pull.
-  // Once shipping is created on eBay the order moves to IN_PROGRESS.
-  const filter = encodeURIComponent("orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}");
-  const orders: any[] = [];
-  let offset = 0;
-  while (true) {
-    const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order?filter=${filter}&limit=200&offset=${offset}`, {
-      cache: "no-store", headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
-    });
-    const body: any = await response.json();
-    if (!response.ok) throw new Error(`eBay orders request failed: ${body.errors?.[0]?.message || response.status}`);
-    orders.push(...(body.orders || []));
-    offset += body.orders?.length || 0;
-    if (!body.next || !body.orders?.length) break;
+  const fetchOrders = async (filterValue?: string) => {
+    const rows: any[] = [];
+    let offset = 0;
+    for (let page = 0; page < 5; page += 1) {
+      const filter = filterValue ? `&filter=${encodeURIComponent(filterValue)}` : "";
+      const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order?limit=200&offset=${offset}${filter}`, {
+        cache: "no-store", headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
+      });
+      const body: any = await response.json();
+      if (!response.ok) throw new Error(`eBay orders request failed: ${body.errors?.[0]?.message || response.status}`);
+      const batch = body.orders || [];
+      rows.push(...batch);
+      offset += batch.length;
+      if (!body.next || !batch.length) break;
+    }
+    return rows;
+  };
+
+  let orders: any[] = [];
+  try {
+    orders = await fetchOrders("orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}");
+  } catch {
+    // Some eBay accounts reject the multi-value status filter. The unfiltered
+    // feed below is then filtered locally using the same fulfillment states.
   }
-  return orders;
+  if (!orders.length) orders = await fetchOrders();
+  return orders.filter((order: any) => {
+    const status = String(order.orderFulfillmentStatus || "").toUpperCase();
+    const canceled = String(order.cancelStatus?.cancelState || "").toUpperCase();
+    return ["NOT_STARTED", "IN_PROGRESS"].includes(status) && !["CANCELED", "CANCELLED"].includes(canceled);
+  });
 }
 
 export async function getOrder(token: string, orderId: string) {

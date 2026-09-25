@@ -93,6 +93,7 @@ export default function Home() {
     [message, setMessage] = useState(""),
     [confirmation, setConfirmation] = useState<ConfirmOptions | null>(null);
   const confirmationResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  const orderImportRunning = useRef(false);
   const confirmAction: ConfirmAction = useCallback((options) => {
     return new Promise((resolve) => {
       confirmationResolver.current = resolve;
@@ -182,6 +183,27 @@ export default function Home() {
     setLoading(true);
     fetch("/api/manapool", { cache: "no-store" }).then(r => r.json()).then(setManaPool).catch(e => setMessage(e.message)).finally(() => setLoading(false));
   }, [view, status.ready]);
+  useEffect(() => {
+    if (!status.ready || !status.ebayConfigured) return;
+    let stopped = false;
+    const importOpenOrders = async () => {
+      if (document.visibilityState !== "visible" || orderImportRunning.current) return;
+      orderImportRunning.current = true;
+      try {
+        const response = await fetch("/api/orders/import", { method: "POST", cache: "no-store" });
+        const result: any = await response.json();
+        if (!response.ok || result?.ok === false) throw new Error(result?.error || "eBay order import failed");
+        if (!stopped) await load();
+      } catch (error) {
+        if (!stopped) setMessage(error instanceof Error ? error.message : "eBay order import failed");
+      } finally {
+        orderImportRunning.current = false;
+      }
+    };
+    importOpenOrders();
+    const timer = window.setInterval(importOpenOrders, 60 * 1000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [status.ready, status.ebayConfigured, load]);
   useEffect(() => {
     // Marketplace webhooks update the hosted database even when no browser is
     // open. While the app is open, refresh the visible data automatically so
