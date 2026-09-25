@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const required = ["*Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)", "*Title", "CustomLabel", "*Quantity", "*C:Set", "*C:Card Name", "*C:Card Number"];
     for (const name of required) if (!headers.includes(name)) throw new Error(`CSV is missing required column: ${name}`);
     const rows = parse(text, { bom: true, columns: true, skip_empty_lines: true, relax_quotes: true }) as Record<string, string>[];
-    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,ebay_quantity,price,match_key&ebay_status=eq.active&match_key=not.is.null&order=id.asc");
+    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,ebay_quantity,price,match_key,physical_skus(sku,location_label,status)&ebay_status=eq.active&match_key=not.is.null&order=id.asc");
     const existingByKey = new Map<string, any[]>();
     for (const listing of listings || []) if (listing.match_key) existingByKey.set(listing.match_key, [...(existingByKey.get(listing.match_key) || []), listing]);
 
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
         continue;
       }
       if (existing.length === 1) {
-        for (const row of group) matches.push({ matchKey: key, listingId: existing[0].id, ebayListingId: existing[0].ebay_listing_id, existingTitle: existing[0].title, existingQuantity: existing[0].ebay_quantity, sku: row.CustomLabel, location: row.CustomLabel, incomingTitle: row["*Title"] });
+        for (const row of group) matches.push({ matchKey: key, listingId: existing[0].id, ebayListingId: existing[0].ebay_listing_id, existingTitle: existing[0].title, existingQuantity: existing[0].ebay_quantity, existingSku:existing[0].ebay_sku, existingLocations:existing[0].physical_skus||[], sku: row.CustomLabel, location: row.CustomLabel, incomingTitle: row["*Title"] });
         continue;
       }
       const first = { ...group[0] };
@@ -47,8 +47,15 @@ export async function POST(request: NextRequest) {
       newOutput.push(first);
       for (const row of group) pending.push({ matchKey: key, sku: row.CustomLabel, location: row.CustomLabel, title: row["*Title"] });
     }
+    const existingMatchGroups=Array.from(new Map(matches.map((row:any)=>[row.listingId,row])).keys()).map((listingId:any)=>{
+      const copies=matches.filter((row:any)=>row.listingId===listingId),first=copies[0];
+      return {listingId,ebayListingId:first.ebayListingId,existingTitle:first.existingTitle,existingQuantity:Number(first.existingQuantity||0),resultQuantity:Number(first.existingQuantity||0)+copies.length,existingSku:first.existingSku,existingLocations:first.existingLocations,incomingSkus:copies.map((x:any)=>x.sku),incomingTitles:[...new Set(copies.map((x:any)=>x.incomingTitle))]};
+    });
+    const newGroups=Array.from(incoming.entries()).filter(([key])=>!(existingByKey.get(key)||[]).length).map(([key,group])=>({
+      matchKey:key,title:group[0]["*Title"],quantity:group.reduce((sum,row)=>sum+Math.max(1,Number(row["*Quantity"]||1)),0),rowCount:group.length,skus:group.map(row=>row.CustomLabel),isDuplicate:group.length>1,
+    }));
     const newCsv = stringify(newOutput, { header: true, columns: headers, quoted: true, record_delimiter: "\r\n" });
-    return NextResponse.json({ fileName: file.name.replace(/\.csv$/i, "") + "_NEW-LISTINGS-ONLY.csv", totalRows: rows.length, newListings: newOutput.length, newCopies: pending.length, matchedCopies: matches.length, conflicts, invalid, matches, pending, newCsv });
+    return NextResponse.json({ fileName: file.name.replace(/\.csv$/i, "") + "_NEW-LISTINGS-ONLY.csv", totalRows: rows.length, newListings: newOutput.length, newCopies: pending.length, newDuplicateCopies:Math.max(0,pending.length-newOutput.length), existingMatchGroups,newGroups, matchedCopies: matches.length, conflicts, invalid, matches, pending, newCsv });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "CSV preview failed" }, { status: 400 });
   }

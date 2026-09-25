@@ -1060,8 +1060,8 @@ function CsvIntake({
     if (!data || data.conflicts.length) return;
     if (!(await confirmAction({
       title: "Apply CSV inventory changes?",
-      message: `${data.matchedCopies} existing-card quantities will be updated and ${data.matchedCopies + data.newCopies} physical SKUs will be stored. This changes live eBay quantities for matched cards.`,
-      confirmLabel: "Apply changes",
+      message: `You reviewed ${data.existingMatchGroups?.length||0} existing eBay match group(s) and ${data.newGroups?.filter((x:any)=>x.isDuplicate).length||0} duplicate group(s) inside the CSV. All ${data.matchedCopies + data.newCopies} physical SKUs will be retained in Supabase.`,
+      confirmLabel: "Confirm and apply",
       tone: "danger",
     }))) return;
     setBusy(true);
@@ -1159,7 +1159,7 @@ function CsvIntake({
               onClick={apply}
             >
               <Check />
-              Apply matched quantities &amp; SKUs
+              Confirm matches &amp; apply SKUs
             </button>
             <button
               className="secondary"
@@ -1173,13 +1173,26 @@ function CsvIntake({
           <section className="panel">
             <Title k="PREVIEW" t="What will happen" />
             <p className="bodycopy">
-              {data.matchedCopies} physical cards match one existing eBay
-              listing and will increase that listing quantity. {data.newCopies}{" "}
-              physical SKUs belong to {data.newListings} new unique listings and
-              will wait in Supabase until the generated CSV is uploaded to eBay
-              and the next eBay import completes.
+              {data.matchedCopies} physical card{data.matchedCopies===1?"":"s"} match existing eBay listings. The other {data.newCopies} physical cards become {data.newListings} unique new listings because {data.newDuplicateCopies} are additional copies found inside this CSV. Every CSV SKU is retained in Supabase.
             </p>
           </section>
+          {!!data.existingMatchGroups?.length && <section className="panel">
+            <Title k="CONFIRM EXISTING MATCHES" t={`${data.existingMatchGroups.length} existing eBay listing${data.existingMatchGroups.length===1?"":"s"}`} />
+            <p className="bodycopy">These cards will not be included in the download file. Their existing eBay quantities will increase and each incoming location SKU will attach to the matching Supabase listing.</p>
+            <div className="mapping-review">{data.existingMatchGroups.map((group:any)=><article className="mapping-card" key={group.listingId}>
+              <div><b>{group.existingTitle}</b><small>eBay #{group.ebayListingId} · Current quantity {group.existingQuantity} → New quantity {group.resultQuantity}</small></div>
+              <div className="mapping-options"><span><b>Existing locations</b><small>{group.existingLocations?.length?group.existingLocations.map((x:any)=>x.sku).join(", "):group.existingSku||"No stored location"}</small></span><span><b>Incoming CSV SKUs</b><small>{group.incomingSkus.join(", ")}</small></span></div>
+            </article>)}</div>
+          </section>}
+          {!!data.newGroups?.length && <section className="panel">
+            <Title k="NEW LISTING GROUPS" t={`${data.newCopies} cards → ${data.newListings} eBay listings`} />
+            <p className="bodycopy">Duplicate cards within the CSV are combined into one output listing with the total quantity shown below. All individual SKUs remain saved for their pull locations.</p>
+            {!!data.newDuplicateCopies&&<div className="mapping-summary"><b>{data.newDuplicateCopies} additional duplicate copies combined</b><small>This is the difference between the physical-card count and the number of new listing rows.</small></div>}
+            <div className="mapping-review">{data.newGroups.map((group:any)=><details className="mapping-card" key={group.matchKey} open={group.isDuplicate}>
+              <summary><b>{group.title}</b><small>{group.isDuplicate?`${group.rowCount} CSV rows combined into quantity ${group.quantity}`:"One new listing"}</small></summary>
+              <div className="mapping-options"><span><b>Supabase pull SKUs</b><small>{group.skus.join(", ")}</small></span></div>
+            </details>)}</div>
+          </section>}
         </>
       )}
     </div>
