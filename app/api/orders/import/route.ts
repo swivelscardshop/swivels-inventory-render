@@ -30,6 +30,20 @@ export async function POST() {
     let updated = 0;
     const unmatched: string[] = [];
 
+    // Remove rows accidentally imported from eBay's historical unfiltered
+    // feed. Their allocated cards were already shipped, so the sold locations
+    // must be removed rather than returned to available inventory.
+    const cutoff = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+    const staleRows = await db(`marketplace_orders?select=id,marketplace_order_id,listing_id&marketplace=eq.ebay&fulfillment_status=eq.unfulfilled&ordered_at=lt.${encodeURIComponent(cutoff)}`);
+    for (const stale of staleRows || []) {
+      const listingFilter = stale.listing_id ? `&listing_id=eq.${stale.listing_id}` : "";
+      await db(`physical_skus?source_order_id=eq.${encodeURIComponent(String(stale.marketplace_order_id))}&status=eq.allocated${listingFilter}`, { method: "DELETE" });
+      await db(`marketplace_orders?id=eq.${stale.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ fulfillment_status: "fulfilled", sku_removed_at: new Date().toISOString() }),
+      });
+    }
+
     for (const order of orders) {
       for (const line of openLines(order)) {
         const itemId = String(line.legacyItemId || "");
@@ -116,11 +130,17 @@ export async function POST() {
             body: JSON.stringify({ status: "allocated", source_order_id: orderId, updated_at: new Date().toISOString() }),
           });
         }
+        const remaining=Math.max(0,Number(listing.ebay_quantity||0)-soldQuantity);
+        await db(`marketplace_listings?id=eq.${listing.id}`, {
+          method:"PATCH",
+          body:JSON.stringify({ebay_quantity:remaining,ebay_status:remaining>0?"active":"inactive",updated_at:new Date().toISOString()}),
+        });
+        listing.ebay_quantity=remaining;
         imported += 1;
       }
     }
 
-    return NextResponse.json({ ok: true, orders: orders.length, lines: orders.reduce((sum: number, order: any) => sum + openLines(order).length, 0), imported, updated, unmatched });
+    return NextResponse.json({ ok: true, orders: orders.length, lines: orders.reduce((sum: number, order: any) => sum + openLines(order).length, 0), imported, updated, staleCleared: staleRows?.length || 0, unmatched });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "eBay order import failed" }, { status: 500 });
   }

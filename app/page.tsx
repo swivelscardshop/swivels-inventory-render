@@ -200,29 +200,11 @@ export default function Home() {
         orderImportRunning.current = false;
       }
     };
+    // One recovery pass when the app opens. Live changes arrive through the
+    // hosted webhook; the browser does not poll eBay on a timer.
     importOpenOrders();
-    const timer = window.setInterval(importOpenOrders, 60 * 1000);
-    return () => { stopped = true; window.clearInterval(timer); };
+    return () => { stopped = true; };
   }, [status.ready, status.ebayConfigured, load]);
-  useEffect(() => {
-    // Marketplace webhooks update the hosted database even when no browser is
-    // open. While the app is open, refresh the visible data automatically so
-    // the user never has to click Import eBay just to see webhook changes.
-    const refreshVisible = async () => {
-      if (document.visibilityState !== "visible") return;
-      try {
-        await load();
-        if (view === "orders") await loadOrders();
-        if (view === "inventory") await loadInventory(q,page);
-        if (view === "manapool") {
-          const r=await fetch("/api/manapool",{cache:"no-store"});
-          if(r.ok)setManaPool(await r.json());
-        }
-      } catch { /* retain the last good screen during a temporary refresh failure */ }
-    };
-    const timer=window.setInterval(refreshVisible,10000);
-    return ()=>window.clearInterval(timer);
-  },[load,loadOrders,loadInventory,view,q,page]);
   useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => setMessage(""), 6000);
@@ -919,7 +901,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
           <button className="primary" disabled={working||!panelData?.configured||webhooks?.configured} onClick={enableWebhooks}>{webhooks?.configured?"Live webhooks verified":"Enable / repair live webhooks"}</button>
         </div>
         {webhooks?.baseUrl&&<p className="bodycopy">Receiving events at {webhooks.baseUrl}</p>}
-        {webhooks?.lastEbayWebhookAt&&<p className="bodycopy">Last eBay event received {new Date(webhooks.lastEbayWebhookAt).toLocaleString()} · {webhooks.lastEbayWebhookResult||"received"}</p>}
+        {webhooks?.lastEbayWebhookAt&&<p className="bodycopy">Last eBay event: {webhooks.lastEbayWebhookEvent||"unknown"} · {new Date(webhooks.lastEbayWebhookAt).toLocaleString()} · {webhooks.lastEbayWebhookResult||"received"}</p>}
       </section>
       <section className="panel">
         <Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic singles"/>

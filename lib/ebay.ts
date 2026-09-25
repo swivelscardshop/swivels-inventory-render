@@ -266,6 +266,18 @@ async function tradingCall(callName: string, xml: string) {
   return parsed?.[`${callName}Response`];
 }
 
+export async function getActiveListingCount() {
+  const root: any = await tradingCall("GetMyeBaySelling", `<?xml version="1.0" encoding="utf-8"?>
+    <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+      <ActiveList>
+        <Include>true</Include>
+        <Pagination><EntriesPerPage>1</EntriesPerPage><PageNumber>1</PageNumber></Pagination>
+      </ActiveList>
+      <DetailLevel>ReturnSummary</DetailLevel>
+    </GetMyeBaySellingRequest>`);
+  return Number(root?.ActiveList?.PaginationResult?.TotalNumberOfEntries || 0);
+}
+
 export async function configureEbayWebhooks(callbackUrl: string) {
   if (!/^https:\/\//i.test(callbackUrl)) throw new Error("eBay webhook URL must use HTTPS");
   // eBay requires the seller's event subscriptions and the application's
@@ -334,14 +346,12 @@ export async function getOpenOrders(token: string) {
     return rows;
   };
 
-  let orders: any[] = [];
-  try {
-    orders = await fetchOrders("orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}");
-  } catch {
-    // Some eBay accounts reject the multi-value status filter. The unfiltered
-    // feed below is then filtered locally using the same fulfillment states.
-  }
-  if (!orders.length) orders = await fetchOrders();
+  // Use a rolling recent window so eBay cannot reintroduce old orders whose
+  // historical fulfillment flag was never corrected. Current sales are
+  // captured immediately and their fulfillment state is filtered locally.
+  const end = new Date();
+  const start = new Date(end.getTime() - 36 * 60 * 60 * 1000);
+  const orders = await fetchOrders(`creationdate:[${start.toISOString()}..${end.toISOString()}]`);
   return orders.filter((order: any) => {
     const status = String(order.orderFulfillmentStatus || "").toUpperCase();
     const canceled = String(order.cancelStatus?.cancelState || "").toUpperCase();
