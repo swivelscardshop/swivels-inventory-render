@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { accessToken, getActiveListings, getOpenOrders, getOrder } from "@/lib/ebay";
 import { db, dbAll } from "@/lib/supabase";
-import { getManaPoolSinglePricesFor, lowestManaPoolPriceForFinish, manaPoolPrice, manaPoolSyncEnabled, setManaPoolInventory } from "@/lib/manapool";
+import { getManaPoolSinglePricesFor, lowestManaPoolPriceForFinish, manaPoolPrice, manaPoolSyncEnabled, manaPoolVariantPriceKey, setManaPoolInventory } from "@/lib/manapool";
 import { chooseScryfallCandidate, findScryfallCandidates, manaPoolVariant } from "@/lib/scryfall";
 
 export const dynamic = "force-dynamic";
@@ -66,9 +66,12 @@ export async function POST() {
     let manaPoolPublished = 0;
     if (manaPoolSyncEnabled()) {
       const activeMapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,ebay_quantity,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+      const variantCounts=new Map<string,number>();
+      for(const row of activeMapped) { const key=manaPoolVariantPriceKey(row); variantCounts.set(key,(variantCounts.get(key)||0)+1); }
       const priceMap = await getManaPoolSinglePricesFor(activeMapped.map((x:any)=>String(x.scryfall_id)));
       const updates:any[] = [];
       for (const row of activeMapped) {
+        if((variantCounts.get(manaPoolVariantPriceKey(row))||0)>1) continue;
         const market = priceMap.get(String(row.scryfall_id).toLowerCase());
         const lowest = market ? lowestManaPoolPriceForFinish(market,row.finish_id||"NF") : null;
         if (lowest === null) continue;

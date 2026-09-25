@@ -818,6 +818,23 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
       setPanelData(b.overview); setMapResult(null); notify("Unresolved cards are queued for a fresh mapping check.");
     } catch(e){notify(e instanceof Error?e.message:"Could not reset unresolved cards");} finally{setWorking(false);}
   };
+  const reviewConflict = async (listing:any) => {
+    setWorking(true);
+    try {
+      const r=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"review-conflict",id:listing.id})});
+      const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Could not reopen this mapping");
+      setPanelData(b.overview); setPreview(null); notify(`${listing.title} is ready for mapping review.`);
+    } catch(e){notify(e instanceof Error?e.message:"Could not reopen this mapping");} finally{setWorking(false);}
+  };
+  const combineConflict = async (conflict:any) => {
+    if(!(await confirmAction({title:"Combine these eBay listings?",message:`These ${conflict.listings.length} listings share the same reviewed Mana Pool printing, condition, language, and finish. The newest eBay listing will remain, quantities will be added, and every physical SKU will be moved to it in Supabase.`,confirmLabel:"Combine listings",tone:"danger"}))) return;
+    setWorking(true);
+    try {
+      const r=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"combine-conflict",listing_ids:conflict.listings.map((x:any)=>x.id)})});
+      const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Could not combine these listings");
+      setPanelData(b.overview); setPreview(null); notify(`Combined the listings at quantity ${b.quantity}; all Supabase locations were preserved.`);
+    } catch(e){notify(e instanceof Error?e.message:"Could not combine these listings");} finally{setWorking(false);}
+  };
   const downloadUnmatchedLog = () => {
     const rows = panelData?.unresolvedDetails || [];
     const quote = (value:any) => `"${String(value ?? "").replace(/"/g,'""')}"`;
@@ -836,16 +853,30 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
         <Metric n={panelData?.unmapped||0} t="Singles needing mapping" d="Mana Pool identifier missing" />
         <Metric n={panelData?.enabled?"ON":"OFF"} t="Live writes" d="Controlled by Render setting" />
       </div>
+      {!!panelData?.conflicts?.length && <section className="panel">
+        <Title k="REVIEW REQUIRED" t={`${panelData.conflicts.length} Mana Pool mapping conflict${panelData.conflicts.length===1?"":"s"}`} />
+        <div className="warning"><AlertTriangle/><div><b>Live inventory sync is blocked for these variants</b><p>Each group points to the same Scryfall printing, condition, language, and finish. Review the titles and Supabase pull locations before combining anything.</p></div></div>
+        <div className="mapping-review">
+          {panelData.conflicts.map((conflict:any)=><article className="mapping-card" key={conflict.key}>
+            <div><b>{conflict.listings[0]?.title}</b><small>Scryfall {conflict.scryfall_id} · {conflict.language_id} · {conflict.condition_id} · {conflict.finish_id}</small></div>
+            {conflict.listings.map((listing:any)=><div className="duprow" key={listing.id}>
+              <div><b>{listing.title}</b><small>eBay #{listing.ebay_listing_id} · Primary SKU {listing.ebay_sku||"—"} · Qty {listing.ebay_quantity}</small><small>Supabase locations: {listing.locations?.length?listing.locations.map((x:any)=>`${x.sku}${x.status!=="available"?` (${x.status})`:""}`).join(", "):"No location stored"}</small></div>
+              <button className="secondary" disabled={working} onClick={()=>reviewConflict(listing)}>Review mapping</button>
+            </div>)}
+            <div className="modal-actions"><button className="primary" disabled={working} onClick={()=>combineConflict(conflict)}>Combine as same card</button></div>
+          </article>)}
+        </div>
+      </section>}
       <section className="panel">
         <Title k="SAFE SYNC" t="Review before live changes" />
         <p className="bodycopy">Each card printing and finish uses the current lowest Mana Pool listing: $0.40 when the lowest price is $0.40 or less; otherwise the lowest price plus 30%. Only reviewed Scryfall mappings are sent.</p>
         <div className="modal-actions">
           <button className="secondary" disabled={working||!panelData?.configured} onClick={()=>run("preview")}>Preview changes</button>
           <button className="secondary" disabled={working||!panelData?.configured} onClick={orders}>Import Mana Pool orders</button>
-          <button className="primary" disabled={working||!panelData?.configured||!panelData?.enabled} onClick={()=>run("sync")}>Sync live inventory</button>
+          <button className="primary" disabled={working||!panelData?.configured||!panelData?.enabled||!!panelData?.conflicts?.length} onClick={()=>run("sync")}>Sync live inventory</button>
         </div>
         {preview && <>
-          <div className={preview.missing?"warning":"mapping-summary"}><Check/><div><b>{preview.total} of {preview.mapped} mapped listings have a market price</b><p>{preview.missing?`${preview.missing} cards were blocked because Mana Pool has no matching printing and finish price.`:preview.enabled?"Live sync is enabled.":"Live sync is still disabled in Render."}</p></div></div>
+          <div className={(preview.missing||preview.conflicts?.length)?"warning":"mapping-summary"}><Check/><div><b>{preview.total} of {preview.mapped} mapped listings have a market price</b><p>{preview.conflicts?.length?`${preview.conflicts.length} mapping conflict${preview.conflicts.length===1?"":"s"} must be reviewed before syncing.`:preview.missing?`${preview.missing} cards were blocked because Mana Pool has no matching printing and finish price.`:preview.enabled?"Live sync is enabled.":"Live sync is still disabled in Render."}</p></div></div>
           {!!preview.preview?.length && <div className="mapping-review">
             <h3>Pricing preview</h3>
             <p className="bodycopy">Showing the first {preview.preview.length} cards. Prices are in U.S. dollars.</p>

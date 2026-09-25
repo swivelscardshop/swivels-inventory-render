@@ -1,13 +1,32 @@
 import { NextResponse } from "next/server";
 import { db, dbAll } from "@/lib/supabase";
-import { getManaPoolOrder, getManaPoolOrders, getManaPoolSinglePricesFor, lowestManaPoolPriceForFinish, manaPoolConfigured, manaPoolPrice, manaPoolSyncEnabled, setManaPoolInventory } from "@/lib/manapool";
-import { endListing, reviseListingQuantity } from "@/lib/ebay";
+import { coalesceManaPoolInventory, getManaPoolOrder, getManaPoolOrders, getManaPoolSinglePricesFor, lowestManaPoolPriceForFinish, manaPoolConfigured, manaPoolPrice, manaPoolSyncEnabled, manaPoolVariantPriceKey, setManaPoolInventory } from "@/lib/manapool";
+import { accessToken, endListing, getActiveListings, reviseListingQuantity } from "@/lib/ebay";
 import { chooseScryfallCandidate, findScryfallCandidates, manaPoolVariant, titleIdentity } from "@/lib/scryfall";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+function mappingConflicts(rows:any[]) {
+  const groups = new Map<string,any[]>();
+  for (const row of rows.filter((x:any)=>x.scryfall_id)) {
+    const key = manaPoolVariantPriceKey(row);
+    groups.set(key,[...(groups.get(key)||[]),row]);
+  }
+  return Array.from(groups.entries()).filter(([,listings])=>listings.length>1).map(([key,listings])=>({
+    key,
+    scryfall_id:listings[0].scryfall_id,
+    language_id:listings[0].language_id||"EN",
+    condition_id:listings[0].condition_id||"NM",
+    finish_id:listings[0].finish_id||"NF",
+    listings:listings.map((x:any)=>({
+      id:x.id,ebay_listing_id:x.ebay_listing_id,title:x.title,ebay_sku:x.ebay_sku,
+      ebay_quantity:x.ebay_quantity,locations:(x.physical_skus||[]).map((s:any)=>({sku:s.sku,location_label:s.location_label,status:s.status})),
+    })),
+  }));
+}
+
 async function overview() {
-  const mapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,card_name,card_number,set_name,finish,condition_name,ebay_quantity,scryfall_id,manapool_mapping_status,manapool_mapping_candidates,manapool_price_cents,manapool_quantity&game=eq.magic&ebay_status=eq.active&order=title.asc");
+  const mapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,card_name,card_number,set_name,finish,condition_name,ebay_quantity,scryfall_id,language_id,finish_id,condition_id,manapool_mapping_status,manapool_mapping_candidates,manapool_price_cents,manapool_quantity,physical_skus(sku,location_label,status)&game=eq.magic&ebay_status=eq.active&order=title.asc");
   const unresolvedDetails = mapped
     .filter((x:any) => !x.scryfall_id && ["unmatched","review"].includes(x.manapool_mapping_status))
     .map((x:any) => {
@@ -32,6 +51,7 @@ async function overview() {
     queued: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status === "pending").length,
     unmatched: mapped.filter((x:any) => !x.scryfall_id && x.manapool_mapping_status === "unmatched").length,
     unresolvedDetails,
+    conflicts:mappingConflicts(mapped),
   };
 }
 
@@ -82,7 +102,37 @@ export async function POST(request: Request) {
       await db(`marketplace_listings?id=eq.${encodeURIComponent(id)}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:scryfallId, manapool_mapping_status:"mapped", ...manaPoolVariant(rows[0]) }) });
       return NextResponse.json({ok:true,overview:await overview()});
     }
-    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,ebay_quantity,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+    if (mode === "review-conflict") {
+      const id=String(body.id||"");
+      const rows=await db(`marketplace_listings?select=id,title,card_name,card_number,set_name,language,finish,condition_name&id=eq.${encodeURIComponent(id)}&game=eq.magic&ebay_status=eq.active&limit=1`);
+      if(!rows?.[0]) throw new Error("Conflicting Magic listing was not found");
+      const candidates=await findScryfallCandidates(rows[0]);
+      await db(`marketplace_listings?id=eq.${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify({scryfall_id:null,manapool_mapping_status:"review",manapool_mapping_candidates:candidates})});
+      return NextResponse.json({ok:true,overview:await overview()});
+    }
+    if (mode === "combine-conflict") {
+      const ids=Array.isArray(body.listing_ids)?[...new Set(body.listing_ids.map(String))].slice(0,20):[];
+      if(ids.length<2||ids.some((id:any)=>!/^[0-9a-f-]{36}$/i.test(id))) throw new Error("Conflict selection could not be verified");
+      const records=await db(`marketplace_listings?select=id,ebay_listing_id,scryfall_id,language_id,finish_id,condition_id&id=in.(${ids.join(",")})&game=eq.magic&ebay_status=eq.active`);
+      if(records?.length!==ids.length||new Set(records.map((x:any)=>manaPoolVariantPriceKey(x))).size!==1) throw new Error("These listings no longer share the same Mana Pool mapping");
+      const token=await accessToken();
+      const ebayIds=new Set(records.map((x:any)=>String(x.ebay_listing_id)));
+      const live=(await getActiveListings(token)).filter((x:any)=>ebayIds.has(String(x.ebay_listing_id)));
+      if(live.length!==records.length) throw new Error("One or more eBay listings are no longer active. Refresh and review again.");
+      live.sort((a:any,b:any)=>(Date.parse(b.started_at||"")||0)-(Date.parse(a.started_at||"")||0)||Number(b.ebay_listing_id)-Number(a.ebay_listing_id));
+      const survivor=live[0],total=live.reduce((sum:number,x:any)=>sum+Number(x.ebay_quantity||0),0);
+      await reviseListingQuantity(String(survivor.ebay_listing_id),total);
+      for(const old of live.slice(1)) await endListing(String(old.ebay_listing_id));
+      const survivorRecord=records.find((x:any)=>String(x.ebay_listing_id)===String(survivor.ebay_listing_id));
+      for(const old of records.filter((x:any)=>x.id!==survivorRecord.id)) {
+        await db(`physical_skus?listing_id=eq.${old.id}`,{method:"PATCH",body:JSON.stringify({listing_id:survivorRecord.id,updated_at:new Date().toISOString()})});
+        await db(`marketplace_listings?id=eq.${old.id}`,{method:"DELETE"});
+      }
+      await db(`marketplace_listings?id=eq.${survivorRecord.id}`,{method:"PATCH",body:JSON.stringify({ebay_quantity:total,updated_at:new Date().toISOString()})});
+      return NextResponse.json({ok:true,quantity:total,ended:live.length-1,overview:await overview()});
+    }
+    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,ebay_quantity,scryfall_id,language_id,finish_id,condition_id,physical_skus(sku,location_label,status)&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+    const conflicts=mappingConflicts(listings);
     const pricesByScryfall = await getManaPoolSinglePricesFor(listings.map((x:any) => String(x.scryfall_id)));
     const priced = listings.flatMap((x:any) => {
       const market = pricesByScryfall.get(String(x.scryfall_id).toLowerCase());
@@ -99,12 +149,14 @@ export async function POST(request: Request) {
       title:x.listing.title, lowest_cents:x.lowestCents, price_cents:x.update.price_cents,
       quantity:x.update.quantity, condition_id:x.update.condition_id, finish_id:x.update.finish_id,
     }));
-    if (mode === "preview") return NextResponse.json({ preview:previewRows, total:priced.length, missing:missing.length, mapped:listings.length, enabled:manaPoolSyncEnabled() });
+    if (mode === "preview") return NextResponse.json({ preview:previewRows, total:priced.length, missing:missing.length, mapped:listings.length, enabled:manaPoolSyncEnabled(),conflicts });
     if (missing.length) throw new Error(`${missing.length} mapped cards have no Mana Pool market price for their printing and finish. Run Preview changes and review them before live sync.`);
-    const updates = priced.map((x:any) => x.update);
+    if (conflicts.length) throw new Error(`${conflicts.length} Mana Pool mapping conflict${conflicts.length===1?"":"s"} must be reviewed before live inventory can be synced.`);
+    const rawUpdates = priced.map((x:any) => x.update);
+    const updates = coalesceManaPoolInventory(rawUpdates);
     const result = await setManaPoolInventory(updates);
     for (const row of priced) await db(`marketplace_listings?id=eq.${row.listing.id}`, { method:"PATCH", body:JSON.stringify({ manapool_quantity:row.listing.ebay_quantity, manapool_lowest_cents:row.lowestCents, manapool_price_cents:row.update.price_cents, last_manapool_sync_at:new Date().toISOString() }) });
-    return NextResponse.json({ ok:true, updated:updates.length, result });
+    return NextResponse.json({ ok:true, updated:updates.length, combinedDuplicates:rawUpdates.length-updates.length, result });
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Mana Pool sync failed" }, { status: 500 }); }
 }
 

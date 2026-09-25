@@ -169,9 +169,27 @@ export type ManaPoolScryfallInventory = {
   custom_external_id?: string | null;
 };
 
+export function coalesceManaPoolInventory(rows: ManaPoolScryfallInventory[]) {
+  const grouped = new Map<string, ManaPoolScryfallInventory>();
+  for (const row of rows) {
+    const key = manaPoolVariantPriceKey(row);
+    const current = grouped.get(key);
+    if (!current) {
+      grouped.set(key, { ...row, quantity:Math.max(0, Number(row.quantity || 0)) });
+      continue;
+    }
+    current.quantity = Math.max(0, Number(current.quantity || 0)) + Math.max(0, Number(row.quantity || 0));
+    // Active eBay listings are added before ended listings. Keep the first
+    // active listing as Mana Pool's order reference for this combined variant.
+    if (!current.custom_external_id && row.custom_external_id) current.custom_external_id = row.custom_external_id;
+    if (current.price_cents == null && row.price_cents != null) current.price_cents = row.price_cents;
+  }
+  return Array.from(grouped.values());
+}
+
 export async function setManaPoolInventory(rows: ManaPoolScryfallInventory[]) {
   if (!manaPoolSyncEnabled()) throw new Error("Mana Pool live sync is disabled. Set MANAPOOL_SYNC_ENABLED=true after reviewing the preview.");
-  return manaPool("/seller/inventory/scryfall_id", { method: "POST", body: JSON.stringify(rows) });
+  return manaPool("/seller/inventory/scryfall_id", { method: "POST", body: JSON.stringify(coalesceManaPoolInventory(rows)) });
 }
 
 export async function fulfillManaPoolOrder(id: string, tracking?: { company?: string; number?: string; url?: string }) {
