@@ -316,22 +316,75 @@ export async function endListing(itemId: string) {
 }
 
 export async function getOpenOrders(token: string) {
-  // Only orders that have not begun fulfillment belong in Ready to pull.
-  // Once shipping is created on eBay the order moves to IN_PROGRESS.
+  // Prefer the modern Fulfillment API. Some eBay seller accounts have
+  // intermittently returned an empty result (or rejected its status filter),
+  // so an empty/error response is verified against Trading GetOrders below.
   const filter = encodeURIComponent("orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}");
   const orders: any[] = [];
   let offset = 0;
-  while (true) {
-    const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order?filter=${filter}&limit=200&offset=${offset}`, {
-      cache: "no-store", headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
-    });
-    const body: any = await response.json();
-    if (!response.ok) throw new Error(`eBay orders request failed: ${body.errors?.[0]?.message || response.status}`);
-    orders.push(...(body.orders || []));
-    offset += body.orders?.length || 0;
-    if (!body.next || !body.orders?.length) break;
+  try {
+    while (true) {
+      const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order?filter=${filter}&limit=200&offset=${offset}`, {
+        cache: "no-store", headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
+      });
+      const body: any = await response.json();
+      if (!response.ok) throw new Error(`eBay orders request failed: ${body.errors?.[0]?.message || response.status}`);
+      orders.push(...(body.orders || []));
+      offset += body.orders?.length || 0;
+      if (!body.next || !body.orders?.length) break;
+    }
+  } catch (error) {
+    console.warn("eBay Fulfillment order feed failed; checking Trading GetOrders", error);
   }
-  return orders;
+  if (orders.length) return orders;
+
+  const tradingOrders: any[] = [];
+  let page = 1;
+  while (page <= 10) {
+    const root: any = await tradingCall("GetOrders", `<?xml version="1.0" encoding="utf-8"?>
+      <GetOrdersRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+        <NumberOfDays>30</NumberOfDays>
+        <OrderRole>Seller</OrderRole>
+        <OrderStatus>All</OrderStatus>
+        <Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination>
+      </GetOrdersRequest>`);
+    const batch = arr<any>(root?.OrderArray?.Order);
+    for (const order of batch) {
+      const cancelState = xmlValue(order.CancelStatus).toUpperCase();
+      const paid = Boolean(xmlValue(order.PaidTime)) || xmlValue(order.CheckoutStatus?.Status).toUpperCase() === "COMPLETE";
+      const shipped = Boolean(xmlValue(order.ShippedTime));
+      if (!paid || shipped || ["CANCELLED", "CANCELED", "CANCELPENDING", "CANCELCOMPLETE"].includes(cancelState)) continue;
+      const transactions = arr<any>(order.TransactionArray?.Transaction);
+      const lineItems = transactions
+        .filter((transaction: any) => !xmlValue(transaction.ShippedTime))
+        .map((transaction: any) => ({
+          lineItemId: xmlValue(transaction.OrderLineItemID) || `${xmlValue(transaction.Item?.ItemID)}-${xmlValue(transaction.TransactionID)}`,
+          legacyItemId: xmlValue(transaction.Item?.ItemID),
+          quantity: Math.max(1, Number(xmlValue(transaction.QuantityPurchased) || 1)),
+          lineItemFulfillmentStatus: "NOT_STARTED",
+          lineItemCost: {
+            value: xmlValue(transaction.TransactionPrice),
+            currency: transaction.TransactionPrice?.["@currencyID"] || "USD",
+          },
+        }))
+        .filter((line: any) => line.legacyItemId);
+      if (!lineItems.length) continue;
+      tradingOrders.push({
+        orderId: xmlValue(order.OrderID),
+        creationDate: xmlValue(order.CreatedTime) || new Date().toISOString(),
+        orderFulfillmentStatus: "NOT_STARTED",
+        cancelStatus: { cancelState },
+        pricingSummary: {
+          total: { value: xmlValue(order.Total), currency: order.Total?.["@currencyID"] || "USD" },
+        },
+        lineItems,
+      });
+    }
+    const totalPages = Number(xmlValue(root?.PaginationResult?.TotalNumberOfPages) || 1);
+    if (page >= totalPages || !batch.length) break;
+    page += 1;
+  }
+  return tradingOrders;
 }
 
 export async function getOrder(token: string, orderId: string) {

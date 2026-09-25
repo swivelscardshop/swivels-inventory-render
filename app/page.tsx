@@ -92,6 +92,7 @@ export default function Home() {
     [loading, setLoading] = useState(false),
     [message, setMessage] = useState(""),
     [confirmation, setConfirmation] = useState<ConfirmOptions | null>(null);
+  const automaticSyncStarted = useRef(false);
   const confirmationResolver = useRef<((confirmed: boolean) => void) | null>(null);
   const confirmAction: ConfirmAction = useCallback((options) => {
     return new Promise((resolve) => {
@@ -187,7 +188,10 @@ export default function Home() {
     let stopped = false;
     const refreshFromEbay = async (showProgress = false) => {
       if (document.visibilityState !== "visible") return;
-      if (showProgress) setMessage("Checking eBay for new listings and orders…");
+      if (showProgress) {
+        setBusy(true);
+        setMessage("Checking eBay for new listings and orders…");
+      }
       try {
         const response = await fetch("/api/sync/automatic", {
           method: "POST",
@@ -197,8 +201,9 @@ export default function Home() {
         if (!response.ok || result?.ok === false) throw new Error(result?.error || "Automatic eBay sync failed");
         if (stopped) return;
         await load();
-        if (view === "orders") await loadOrders();
-        if (result.automatic) {
+        if (result.warning) {
+          setMessage(result.warning);
+        } else if (result.automatic) {
           setMessage(`eBay updated: ${Number(result.listings || 0).toLocaleString()} active listings.`);
         } else if (showProgress) {
           setMessage("");
@@ -207,15 +212,20 @@ export default function Home() {
         if (!stopped && showProgress) {
           setMessage(error instanceof Error ? error.message : "Automatic eBay sync failed");
         }
+      } finally {
+        if (!stopped && showProgress) setBusy(false);
       }
     };
-    refreshFromEbay(true);
+    if (!automaticSyncStarted.current) {
+      automaticSyncStarted.current = true;
+      refreshFromEbay(true);
+    }
     const timer = window.setInterval(() => refreshFromEbay(false), 5 * 60 * 1000);
     return () => {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [status.ready, status.ebayConfigured, load, loadOrders, view]);
+  }, [status.ready, status.ebayConfigured, load]);
   useEffect(() => {
     // Marketplace webhooks update the hosted database even when no browser is
     // open. While the app is open, refresh the visible data automatically so
