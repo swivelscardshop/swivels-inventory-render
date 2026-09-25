@@ -214,7 +214,6 @@ export default function Home() {
         await load();
         if (view === "orders") await loadOrders();
         if (view === "inventory") await loadInventory(q,page);
-        if (view === "duplicates") await loadDuplicates();
         if (view === "manapool") {
           const r=await fetch("/api/manapool",{cache:"no-store"});
           if(r.ok)setManaPool(await r.json());
@@ -223,7 +222,7 @@ export default function Home() {
     };
     const timer=window.setInterval(refreshVisible,10000);
     return ()=>window.clearInterval(timer);
-  },[load,loadOrders,loadInventory,loadDuplicates,view,q,page]);
+  },[load,loadOrders,loadInventory,view,q,page]);
   useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => setMessage(""), 6000);
