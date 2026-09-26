@@ -15,27 +15,29 @@ export async function GET() {
 export async function PATCH(request: Request) {
   try {
     const body: any = await request.json();
-    const id = String(body?.id || "");
-    if (!/^[0-9a-f-]{36}$/i.test(id)) return NextResponse.json({ error: "Invalid order" }, { status: 400 });
-    const rows = await db(`marketplace_orders?select=id,marketplace,marketplace_order_id,listing_id,fulfillment_status&id=eq.${id}&limit=1`);
-    const order = rows?.[0];
-    if (!order) return NextResponse.json({ error: "Order not found" }, { status: 404 });
-    if (order.fulfillment_status !== "unfulfilled") return NextResponse.json({ error: "Order was already completed" }, { status: 409 });
+    const marketplace = String(body?.marketplace || "");
+    const marketplaceOrderId = String(body?.marketplaceOrderId || "");
+    if (!["ebay", "manapool"].includes(marketplace) || !marketplaceOrderId || marketplaceOrderId.length > 120)
+      return NextResponse.json({ error: "Invalid order" }, { status: 400 });
+    const rows = await db(`marketplace_orders?select=id,marketplace,marketplace_order_id,listing_id,fulfillment_status&marketplace=eq.${marketplace}&marketplace_order_id=eq.${encodeURIComponent(marketplaceOrderId)}&fulfillment_status=eq.unfulfilled`);
+    if (!rows?.length) return NextResponse.json({ error: "Order not found or already completed" }, { status: 404 });
 
-    if (order.marketplace === "manapool") {
-      await fulfillManaPoolOrder(String(order.marketplace_order_id), body?.tracking);
+    if (marketplace === "manapool") {
+      await fulfillManaPoolOrder(marketplaceOrderId, body?.tracking);
     }
 
-    const listingFilter = order.listing_id ? `&listing_id=eq.${order.listing_id}` : "";
-    await db(`physical_skus?source_order_id=eq.${encodeURIComponent(String(order.marketplace_order_id))}&status=eq.allocated${listingFilter}`, { method: "DELETE" });
-    await db(`marketplace_orders?id=eq.${id}`, {
+    for (const line of rows) {
+      const listingFilter = line.listing_id ? `&listing_id=eq.${line.listing_id}` : "";
+      await db(`physical_skus?source_order_id=eq.${encodeURIComponent(marketplaceOrderId)}&status=eq.allocated${listingFilter}`, { method: "DELETE" });
+    }
+    await db(`marketplace_orders?marketplace=eq.${marketplace}&marketplace_order_id=eq.${encodeURIComponent(marketplaceOrderId)}&fulfillment_status=eq.unfulfilled`, {
       method: "PATCH", body: JSON.stringify({ fulfillment_status: "fulfilled", sku_removed_at: new Date().toISOString() }),
     });
-    if (order.listing_id) {
-      const remaining = await db(`physical_skus?select=id&listing_id=eq.${order.listing_id}&limit=1`);
-      if (!remaining?.length) await db(`marketplace_listings?id=eq.${order.listing_id}&ebay_status=eq.inactive`, { method: "DELETE" });
+    for (const listingId of [...new Set(rows.map((line:any)=>line.listing_id).filter(Boolean))]) {
+      const remaining = await db(`physical_skus?select=id&listing_id=eq.${listingId}&limit=1`);
+      if (!remaining?.length) await db(`marketplace_listings?id=eq.${listingId}&ebay_status=eq.inactive`, { method: "DELETE" });
     }
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, lines: rows.length });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Shipment confirmation failed" }, { status: 500 });
   }

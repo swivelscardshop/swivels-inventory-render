@@ -678,22 +678,31 @@ function Inventory({
 function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[]; loading: boolean; reload: () => Promise<void>; notify: (message: string) => void; confirmAction: ConfirmAction }) {
   const [shipping, setShipping] = useState<string | null>(null);
   const [orderCategory, setOrderCategory] = useState<"ebay" | "manapool">("ebay");
-  const ebayOrders = rows.filter((row) => row.marketplace !== "manapool");
-  const manaPoolOrders = rows.filter((row) => row.marketplace === "manapool");
+  const groupedOrders = [...rows.reduce((groups: Map<string, any>, row: any) => {
+    const marketplace = row.marketplace === "manapool" ? "manapool" : "ebay";
+    const key = `${marketplace}:${row.marketplace_order_id}`;
+    const group = groups.get(key) || { key, marketplace, marketplace_order_id: row.marketplace_order_id, ordered_at: row.ordered_at, lines: [] };
+    group.lines.push(row);
+    groups.set(key, group);
+    return groups;
+  }, new Map()).values()].sort((a: any, b: any) => String(b.ordered_at).localeCompare(String(a.ordered_at)));
+  const ebayOrders = groupedOrders.filter((order: any) => order.marketplace !== "manapool");
+  const manaPoolOrders = groupedOrders.filter((order: any) => order.marketplace === "manapool");
   const displayedOrders = orderCategory === "ebay" ? ebayOrders : manaPoolOrders;
   const confirmShipped = async (order: any) => {
+    const quantity = order.lines.reduce((sum: number, line: any) => sum + Number(line.quantity || 0), 0);
     if (!(await confirmAction({
       title: "Confirm shipment?",
-      message: `Order #${order.marketplace_order_id} will be completed and its allocated SKU will be permanently removed from Supabase. Only continue after the card has shipped.`,
+      message: `Order #${order.marketplace_order_id} contains ${quantity} card${quantity === 1 ? "" : "s"} across ${order.lines.length} line${order.lines.length === 1 ? "" : "s"}. The entire order and all allocated SKUs will be completed together.`,
       confirmLabel: "Confirm shipped",
       tone: "danger",
     }))) return;
-    setShipping(order.id);
+    setShipping(order.key);
     try {
-      const response = await fetch("/api/orders", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: order.id }) });
+      const response = await fetch("/api/orders", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ marketplace: order.marketplace, marketplaceOrderId: order.marketplace_order_id }) });
       const body: any = await response.json();
       if (!response.ok) throw new Error(body.error || "Shipment confirmation failed");
-      notify(`Order #${order.marketplace_order_id} marked shipped. Allocated SKU removed from Supabase.`);
+      notify(`Order #${order.marketplace_order_id} marked shipped. ${body.lines || order.lines.length} order line(s) completed together.`);
       await reload();
     } catch (error) {
       notify(error instanceof Error ? error.message : "Shipment confirmation failed");
@@ -705,8 +714,8 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
     <div className="stack">
       <Intro
         title="Orders to fulfill"
-        text="The displayed SKU is reserved in Supabase for this order. It is removed only after you click Confirm shipped."
-        action={<span className="count">Up to 50 order lines</span>}
+        text="Each marketplace order is grouped together. Confirm shipped once to complete every card and remove all allocated SKUs in that order."
+        action={<span className="count">{groupedOrders.length} open orders</span>}
       />
       <div className="order-categories" role="tablist" aria-label="Order marketplace">
         <button className={orderCategory === "ebay" ? "active" : ""} onClick={() => setOrderCategory("ebay")}><span>eBay orders</span><b>{ebayOrders.length}</b></button>
@@ -717,44 +726,38 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
       ) : (
         <>
           <div className="ordergrid">
-            {displayedOrders.map((o) => {
-              const l = o.marketplace_listings;
-              const legacyItemId = o.raw_payload?.legacyItemId;
-              const image = legacyItemId ? `/api/ebay/image?itemId=${encodeURIComponent(String(legacyItemId))}` : (l?.image_url || o.raw_payload?.image_url);
+            {displayedOrders.map((o: any) => {
+              const first = o.lines[0];
               const total = o.marketplace === "manapool"
-                ? (o.raw_payload?.mana_pool_order?.total_cents ?? o.raw_payload?.total_cents)
-                : o.raw_payload?.orderTotal;
+                ? (first?.raw_payload?.mana_pool_order?.total_cents ?? first?.raw_payload?.total_cents)
+                : first?.raw_payload?.orderTotal;
               const totalText = total == null ? "—" : o.marketplace === "manapool"
                 ? `$${(Number(total) / 100).toFixed(2)}`
-                : new Intl.NumberFormat("en-US", { style: "currency", currency: o.raw_payload?.currency || "USD" }).format(Number(total));
+                : new Intl.NumberFormat("en-US", { style: "currency", currency: first?.raw_payload?.currency || "USD" }).format(Number(total));
+              const quantity = o.lines.reduce((sum: number, line: any) => sum + Number(line.quantity || 0), 0);
               return (
-                <article className="order" key={o.id}>
-                  <div className="ordertop">
-                    <span>{o.marketplace === "manapool" ? "Mana Pool" : "eBay"}</span>
-                    <small>{new Date(o.ordered_at).toLocaleString()}</small>
-                  </div>
-                  <div className="order-card-info">
-                    <div className="card-title-hover">
-                      <h3>{o.order_title || l?.title || "eBay order"}</h3>
-                      {image && <div className="card-image-popover"><img src={image} alt={o.order_title || l?.title || "Card"} /></div>}
+                <article className="order order-group" key={o.key}>
+                  <div className="order-group-head">
+                    <div className="ordertop">
+                      <span>{o.marketplace === "manapool" ? "Mana Pool" : "eBay"}</span>
+                      <small>{new Date(o.ordered_at).toLocaleString()}</small>
                     </div>
-                    <p>Order #{o.marketplace_order_id}</p>
+                    <div className="order-summary"><h3>Order #{o.marketplace_order_id}</h3><p>{o.lines.length} item{o.lines.length === 1 ? "" : "s"} · {quantity} card{quantity === 1 ? "" : "s"}</p></div>
+                    <div className="order-stat"><small>ORDER TOTAL</small><b>{totalText}</b></div>
+                    <button className="primary wide" disabled={shipping === o.key} onClick={() => confirmShipped(o)}>
+                      <PackageCheck /> {shipping === o.key ? "Confirming…" : "Confirm entire order shipped"}
+                    </button>
                   </div>
-                  <div className="order-stat"><small>QUANTITY</small><b>{o.quantity}</b></div>
-                  <div className="order-stat"><small>ORDER TOTAL</small><b>{totalText}</b></div>
-                  <div className="location">
-                    <small>PULL LOCATION / SOLD SKU</small>
-                    <b>
-                      <MapPin />
-                      {o.pull_location ||
-                        o.pull_sku ||
-                        l?.ebay_sku ||
-                        "No physical location"}
-                    </b>
-                  </div>
-                  <button className="primary wide" disabled={shipping === o.id} onClick={() => confirmShipped(o)}>
-                    <PackageCheck /> {shipping === o.id ? "Confirming…" : "Confirm shipped"}
-                  </button>
+                  <div className="order-lines">{o.lines.map((line: any) => {
+                    const l = line.marketplace_listings;
+                    const legacyItemId = line.raw_payload?.legacyItemId;
+                    const image = legacyItemId ? `/api/ebay/image?itemId=${encodeURIComponent(String(legacyItemId))}` : (l?.image_url || line.raw_payload?.image_url);
+                    return <div className="order-line" key={line.id}>
+                      <div className="order-card-info"><div className="card-title-hover"><h3>{line.order_title || l?.title || "Card"}</h3>{image && <div className="card-image-popover"><img src={image} alt={line.order_title || l?.title || "Card"} /></div>}</div></div>
+                      <div className="order-stat"><small>QUANTITY</small><b>{line.quantity}</b></div>
+                      <div className="location"><small>PULL LOCATION / SOLD SKU</small><b><MapPin />{line.pull_location || line.pull_sku || l?.ebay_sku || "No physical location"}</b></div>
+                    </div>;
+                  })}</div>
                 </article>
               );
             })}
