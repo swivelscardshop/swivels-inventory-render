@@ -23,7 +23,7 @@ export async function POST() {
     const itemIds = [...new Set(orders.flatMap((order: any) => openLines(order).map((line: any) => String(line.legacyItemId || ""))).filter(Boolean))];
     const storedListings: any[] = [];
     for (const group of chunks(itemIds, 150)) {
-      storedListings.push(...await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url&ebay_listing_id=in.(${group.join(",")})`));
+      storedListings.push(...await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url,ebay_quantity&ebay_listing_id=in.(${group.join(",")})`));
     }
     const listingMap = new Map(storedListings.map((row: any) => [String(row.ebay_listing_id), row]));
     let imported = 0;
@@ -73,7 +73,7 @@ export async function POST() {
               updated_at: now,
             }),
           });
-          listing = (await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url&ebay_listing_id=eq.${itemId}&limit=1`))?.[0];
+          listing = (await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url,ebay_quantity&ebay_listing_id=eq.${itemId}&limit=1`))?.[0];
           if (listing) listingMap.set(itemId, listing);
         }
         if (!listing) {

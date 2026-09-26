@@ -93,6 +93,7 @@ export default function Home() {
     [message, setMessage] = useState(""),
     [confirmation, setConfirmation] = useState<ConfirmOptions | null>(null);
   const confirmationResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  const orderImportRunning = useRef(false);
   const confirmAction: ConfirmAction = useCallback((options) => {
     return new Promise((resolve) => {
       confirmationResolver.current = resolve;
@@ -183,25 +184,27 @@ export default function Home() {
     fetch("/api/manapool", { cache: "no-store" }).then(r => r.json()).then(setManaPool).catch(e => setMessage(e.message)).finally(() => setLoading(false));
   }, [view, status.ready]);
   useEffect(() => {
-    // Marketplace webhooks update the hosted database even when no browser is
-    // open. While the app is open, refresh the visible data automatically so
-    // the user never has to click Import eBay just to see webhook changes.
-    const refreshVisible = async () => {
-      if (document.visibilityState !== "visible") return;
+    if (!status.ready || !status.ebayConfigured) return;
+    let stopped = false;
+    const importOpenOrders = async () => {
+      if (document.visibilityState !== "visible" || orderImportRunning.current) return;
+      orderImportRunning.current = true;
       try {
-        await load();
-        if (view === "orders") await loadOrders();
-        if (view === "inventory") await loadInventory(q,page);
-        if (view === "duplicates") await loadDuplicates();
-        if (view === "manapool") {
-          const r=await fetch("/api/manapool",{cache:"no-store"});
-          if(r.ok)setManaPool(await r.json());
-        }
-      } catch { /* retain the last good screen during a temporary refresh failure */ }
+        const response = await fetch("/api/orders/import", { method: "POST", cache: "no-store" });
+        const result: any = await response.json();
+        if (!response.ok || result?.ok === false) throw new Error(result?.error || "eBay order import failed");
+        if (!stopped) await load();
+      } catch (error) {
+        if (!stopped) setMessage(error instanceof Error ? error.message : "eBay order import failed");
+      } finally {
+        orderImportRunning.current = false;
+      }
     };
-    const timer=window.setInterval(refreshVisible,10000);
-    return ()=>window.clearInterval(timer);
-  },[load,loadOrders,loadInventory,loadDuplicates,view,q,page]);
+    // One recovery pass when the app opens. Live changes arrive through the
+    // hosted webhook; the browser does not poll eBay on a timer.
+    importOpenOrders();
+    return () => { stopped = true; };
+  }, [status.ready, status.ebayConfigured, load]);
   useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => setMessage(""), 6000);
@@ -898,7 +901,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
           <button className="primary" disabled={working||!panelData?.configured||webhooks?.configured} onClick={enableWebhooks}>{webhooks?.configured?"Live webhooks verified":"Enable / repair live webhooks"}</button>
         </div>
         {webhooks?.baseUrl&&<p className="bodycopy">Receiving events at {webhooks.baseUrl}</p>}
-        {webhooks?.lastEbayWebhookAt&&<p className="bodycopy">Last eBay event received {new Date(webhooks.lastEbayWebhookAt).toLocaleString()} · {webhooks.lastEbayWebhookResult||"received"}</p>}
+        {webhooks?.lastEbayWebhookAt&&<p className="bodycopy">Last eBay event: {webhooks.lastEbayWebhookEvent||"unknown"} · {new Date(webhooks.lastEbayWebhookAt).toLocaleString()} · {webhooks.lastEbayWebhookResult||"received"}</p>}
       </section>
       <section className="panel">
         <Title k="REQUIRED BEFORE FIRST SYNC" t="Map Magic singles"/>

@@ -82,7 +82,7 @@ function bestEbayImage(item: any) {
 
 export type EbayListing = {
   ebay_listing_id: string; ebay_sku: string | null; title: string; game: "pokemon" | "magic" | "other";
-  set_name: string | null; price: number; ebay_quantity: number; ebay_status: "active"; image_url: string | null;
+  set_name: string | null; price: number; ebay_quantity: number; ebay_status: "active" | "inactive"; image_url: string | null;
   last_ebay_sync_at: string; updated_at: string;
   card_name: string | null; card_number: string | null; finish: string | null;
   language: string | null; condition_name: string | null; parallel_variety: string | null; match_key: string | null;
@@ -233,7 +233,10 @@ export async function getActiveListings(token: string) {
         finish: identity.finish, language: identity.language, condition_name: identity.condition,
         parallel_variety: identity.parallel, match_key: cardMatchKey(identity) || null,
         price: Number(item.SellingStatus?.CurrentPrice?.["#text"] ?? item.SellingStatus?.CurrentPrice ?? 0),
-        ebay_quantity: quantity, ebay_status: "active", image_url: bestEbayImage(item),
+        // Good 'Til Cancelled listings can remain in eBay's ActiveList with no
+        // sellable inventory. Keep the record for history, but do not count it
+        // as an active listing in the app.
+        ebay_quantity: quantity, ebay_status: quantity > 0 ? "active" : "inactive", image_url: bestEbayImage(item),
         last_ebay_sync_at: now, updated_at: now,
         started_at: item.ListingDetails?.StartTime ? String(item.ListingDetails.StartTime) : null,
       });
@@ -264,6 +267,18 @@ async function tradingCall(callName: string, xml: string) {
   }
   const parsed: any = new XMLParser({ ignoreAttributes: false }).parse(text);
   return parsed?.[`${callName}Response`];
+}
+
+export async function getActiveListingCount() {
+  const root: any = await tradingCall("GetMyeBaySelling", `<?xml version="1.0" encoding="utf-8"?>
+    <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+      <ActiveList>
+        <Include>true</Include>
+        <Pagination><EntriesPerPage>1</EntriesPerPage><PageNumber>1</PageNumber></Pagination>
+      </ActiveList>
+      <DetailLevel>ReturnSummary</DetailLevel>
+    </GetMyeBaySellingRequest>`);
+  return Number(root?.ActiveList?.PaginationResult?.TotalNumberOfEntries || 0);
 }
 
 export async function configureEbayWebhooks(callbackUrl: string) {
@@ -316,22 +331,35 @@ export async function endListing(itemId: string) {
 }
 
 export async function getOpenOrders(token: string) {
-  // Only orders that have not begun fulfillment belong in Ready to pull.
-  // Once shipping is created on eBay the order moves to IN_PROGRESS.
-  const filter = encodeURIComponent("orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}");
-  const orders: any[] = [];
-  let offset = 0;
-  while (true) {
-    const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order?filter=${filter}&limit=200&offset=${offset}`, {
-      cache: "no-store", headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
-    });
-    const body: any = await response.json();
-    if (!response.ok) throw new Error(`eBay orders request failed: ${body.errors?.[0]?.message || response.status}`);
-    orders.push(...(body.orders || []));
-    offset += body.orders?.length || 0;
-    if (!body.next || !body.orders?.length) break;
-  }
-  return orders;
+  const fetchOrders = async (filterValue?: string) => {
+    const rows: any[] = [];
+    let offset = 0;
+    for (let page = 0; page < 5; page += 1) {
+      const filter = filterValue ? `&filter=${encodeURIComponent(filterValue)}` : "";
+      const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order?limit=200&offset=${offset}${filter}`, {
+        cache: "no-store", headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
+      });
+      const body: any = await response.json();
+      if (!response.ok) throw new Error(`eBay orders request failed: ${body.errors?.[0]?.message || response.status}`);
+      const batch = body.orders || [];
+      rows.push(...batch);
+      offset += batch.length;
+      if (!body.next || !batch.length) break;
+    }
+    return rows;
+  };
+
+  // Use a rolling recent window so eBay cannot reintroduce old orders whose
+  // historical fulfillment flag was never corrected. Current sales are
+  // captured immediately and their fulfillment state is filtered locally.
+  const end = new Date();
+  const start = new Date(end.getTime() - 36 * 60 * 60 * 1000);
+  const orders = await fetchOrders(`creationdate:[${start.toISOString()}..${end.toISOString()}]`);
+  return orders.filter((order: any) => {
+    const status = String(order.orderFulfillmentStatus || "").toUpperCase();
+    const canceled = String(order.cancelStatus?.cancelState || "").toUpperCase();
+    return ["NOT_STARTED", "IN_PROGRESS"].includes(status) && !["CANCELED", "CANCELLED"].includes(canceled);
+  });
 }
 
 export async function getOrder(token: string, orderId: string) {

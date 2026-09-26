@@ -18,6 +18,7 @@ export async function POST() {
     const token = await accessToken();
     const listings = await getActiveListings(token);
     if (!listings.length) throw new Error("eBay returned zero active listings. No Supabase records were changed.");
+    const sellableListings = listings.filter((listing) => listing.ebay_status === "active" && listing.ebay_quantity > 0);
     const previousMappedMagic = await dbAll("marketplace_listings?select=id,ebay_listing_id,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
 
     // The normal import is read-only against eBay and refreshes the Supabase catalog.
@@ -35,7 +36,7 @@ export async function POST() {
     // PostgREST has intermittently preserved the old `game` value while
     // merging existing listing rows. Apply the eBay classification explicitly
     // so Mana Pool reads the same set reported by the import response.
-    const magicListingIds = listings.filter((listing) => listing.game === "magic").map((listing) => listing.ebay_listing_id);
+    const magicListingIds = sellableListings.filter((listing) => listing.game === "magic").map((listing) => listing.ebay_listing_id);
     for (const group of chunks(magicListingIds, 100)) {
       await db(`marketplace_listings?ebay_listing_id=in.(${group.join(",")})`, {
         method: "PATCH", body: JSON.stringify({ game: "magic", updated_at: new Date().toISOString() }),
@@ -77,7 +78,7 @@ export async function POST() {
         if (lowest === null) continue;
         updates.push({scryfall_id:String(row.scryfall_id),language_id:row.language_id||"EN",finish_id:row.finish_id||"NF",condition_id:row.condition_id||"NM",quantity:Number(row.ebay_quantity||0),price_cents:manaPoolPrice(lowest),custom_external_id:String(row.ebay_listing_id)});
       }
-      const activeIds = new Set(listings.map(x=>String(x.ebay_listing_id)));
+      const activeIds = new Set(sellableListings.map(x=>String(x.ebay_listing_id)));
       for (const row of previousMappedMagic.filter((x:any)=>!activeIds.has(String(x.ebay_listing_id)))) updates.push({scryfall_id:String(row.scryfall_id),language_id:row.language_id||"EN",finish_id:row.finish_id||"NF",condition_id:row.condition_id||"NM",quantity:0,price_cents:null,custom_external_id:String(row.ebay_listing_id)});
       if (updates.length) await setManaPoolInventory(updates);
       manaPoolPublished=updates.length;
@@ -91,7 +92,7 @@ export async function POST() {
     const listingMap = new Map(stored.map(x => [String(x.ebay_listing_id), x.id]));
 
     // Preserve the primary location carried by each active eBay listing.
-    const primaryLocations = listings.filter(x => x.ebay_sku).map(x => ({
+    const primaryLocations = sellableListings.filter(x => x.ebay_sku).map(x => ({
       listing_id: listingMap.get(x.ebay_listing_id), sku: x.ebay_sku,
       location_label: x.ebay_sku, status: "available", source: "ebay",
       updated_at: new Date().toISOString(),
@@ -220,10 +221,10 @@ export async function POST() {
       // Allocated SKUs remain in Supabase until the user explicitly confirms
       // shipment in the app or eBay reports that fulfillment has started.
     } catch (orderError) {
-      const magicSingles = listings.filter(x => x.game === "magic").length;
-      return NextResponse.json({ ok: true, listings: listings.length, magicSingles, orders: 0, warning: `Imported ${listings.length.toLocaleString()} listings including ${magicSingles.toLocaleString()} Magic singles. Orders could not be imported: ${orderError instanceof Error ? orderError.message : "unknown error"}` });
+      const magicSingles = sellableListings.filter(x => x.game === "magic").length;
+      return NextResponse.json({ ok: true, listings: sellableListings.length, zeroQuantityExcluded: listings.length-sellableListings.length, magicSingles, orders: 0, warning: `Imported ${sellableListings.length.toLocaleString()} active listings including ${magicSingles.toLocaleString()} Magic singles. Orders could not be imported: ${orderError instanceof Error ? orderError.message : "unknown error"}` });
     }
-    return NextResponse.json({ ok: true, listings: listings.length, magicSingles: listings.filter(x => x.game === "magic").length, orders: importedOrders, completedOrders, automaticallyMapped, mappingReview, manaPoolPublished });
+    return NextResponse.json({ ok: true, listings: sellableListings.length, zeroQuantityExcluded: listings.length-sellableListings.length, magicSingles: sellableListings.filter(x => x.game === "magic").length, orders: importedOrders, completedOrders, automaticallyMapped, mappingReview, manaPoolPublished });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Sync failed" }, { status: 500 });
   }

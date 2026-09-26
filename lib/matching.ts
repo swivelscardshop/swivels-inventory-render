@@ -7,9 +7,13 @@ export type CardIdentity = {
 const clean = (value?: string | null) => String(value || "").toLowerCase()
   .normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 
-const titleCardName = (title?: string | null) => clean(title)
+const titleCardName = (title?: string | null) => clean(String(title || "").replace(/\([^)]*\)/g, " "))
   // Keep card number, set, variant, game and language. Remove only condition
   // wording because condition is normalized into its own identity component.
+  // Marketplace wording is equivalent: "MTG" and "Magic The Gathering TCG"
+  // must produce the same key. Parenthetical notes are intentionally ignored.
+  .replace(/\bmagic the gathering(?: tcg)?\b/g, "mtg")
+  .replace(/\bpokemon trading card game\b|\bpokemon tcg\b/g, "pokemon")
   .replace(/\b(near mint(?: or better)?|nm|light play|lightly played|lp|moderate play|moderately play|moderately played|mod play|mp|heavy play|heavily played|hp|damaged|damage|dmg)\b/g, " ")
   .replace(/\s+/g, " ").trim();
 

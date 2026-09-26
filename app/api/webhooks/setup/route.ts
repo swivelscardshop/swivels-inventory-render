@@ -11,7 +11,7 @@ function baseUrl(request:Request) {
 
 export async function GET() {
   try {
-    const stored=await db("app_secrets?select=key,value,updated_at&key=in.(webhook_base_url,last_ebay_webhook_at,last_ebay_webhook_result)&limit=10");
+    const stored=await db("app_secrets?select=key,value,updated_at&key=in.(webhook_base_url,last_ebay_webhook_at,last_ebay_webhook_event,last_ebay_webhook_result)&limit=10");
     const saved=Object.fromEntries((stored||[]).map((x:any)=>[x.key,x]));
     const base=saved.webhook_base_url?.value||null;
     const [mana,ebay] = await Promise.all([
@@ -20,7 +20,7 @@ export async function GET() {
     ]);
     const manaPool=mana?.webhooks||[];
     const manaPoolLive=manaPool.some((x:any)=>String(x.topic||"")==="order_created");
-    return NextResponse.json({configured:Boolean(base&&ebay.live&&manaPoolLive),baseUrl:base,ebay,manaPool,manaPoolLive,lastEbayWebhookAt:saved.last_ebay_webhook_at?.value||null,lastEbayWebhookResult:saved.last_ebay_webhook_result?.value||null});
+    return NextResponse.json({configured:Boolean(base&&ebay.live&&manaPoolLive),baseUrl:base,ebay,manaPool,manaPoolLive,lastEbayWebhookAt:saved.last_ebay_webhook_at?.value||null,lastEbayWebhookEvent:saved.last_ebay_webhook_event?.value||null,lastEbayWebhookResult:saved.last_ebay_webhook_result?.value||null});
   } catch (error) { return NextResponse.json({error:error instanceof Error?error.message:"Webhook status failed"},{status:500}); }
 }
 
