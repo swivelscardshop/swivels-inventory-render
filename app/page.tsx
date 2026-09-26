@@ -949,6 +949,10 @@ function Duplicates({
   setMessage: (v: string) => void;
   confirmAction: ConfirmAction;
 }) {
+  const [gameTab, setGameTab] = useState<"pokemon" | "magic">("pokemon");
+  const pokemonGroups = groups.filter((group: any) => group.listings?.some((listing: any) => listing.game === "pokemon"));
+  const magicGroups = groups.filter((group: any) => group.listings?.some((listing: any) => listing.game === "magic"));
+  const displayedGroups = gameTab === "pokemon" ? pokemonGroups : magicGroups;
   const combine = async (group: any, survivorEbayId: string) => {
     if (!(await confirmAction({
       title: "Combine duplicate listings?",
@@ -981,12 +985,16 @@ function Duplicates({
       <Intro
         title="Duplicate Center"
         text="Scans every active eBay listing. Same-name cards in different conditions are treated as unique; only the same card in the same condition is flagged."
-        action={<span className="count">{groups.length} groups</span>}
+        action={<span className="count">{displayedGroups.length} groups</span>}
       />
+      <div className="order-categories" role="tablist" aria-label="Duplicate card game">
+        <button className={gameTab === "pokemon" ? "active" : ""} onClick={() => setGameTab("pokemon")}><span>Pokémon</span><b>{pokemonGroups.length}</b></button>
+        <button className={gameTab === "magic" ? "active" : ""} onClick={() => setGameTab("magic")}><span>Magic</span><b>{magicGroups.length}</b></button>
+      </div>
       {loading ? (
         <Empty text="Scanning active eBay listings…" />
       ) : (
-        groups.map((g: any) => (
+        displayedGroups.map((g: any) => (
           <section className="panel duplicate" key={g.matchKey}>
             <Title
               k="DUPLICATE EBAY LISTINGS"
@@ -1013,8 +1021,8 @@ function Duplicates({
           </section>
         ))
       )}
-      {!loading && !groups.length && (
-        <Empty text="No exact duplicate active eBay listings were found." />
+      {!loading && !displayedGroups.length && (
+        <Empty text={`No exact duplicate active ${gameTab === "pokemon" ? "Pokémon" : "Magic"} listings were found.`} />
       )}
     </div>
   );
