@@ -55,7 +55,14 @@ export async function POST(request:Request) {
       const attempts=event==="FixedPriceTransaction"?3:1;
       for(let attempt=1;attempt<=attempts;attempt+=1){
         const response=await handler.POST();
-        if(!response.ok) throw new Error(await response.text());
+        if(!response.ok) {
+          const failure=await response.text();
+          if(attempt===attempts) throw new Error(failure);
+          // A retry is safe: the order importer recognizes an existing order
+          // and republishes its stored quantity without subtracting twice.
+          await new Promise(resolve=>setTimeout(resolve,attempt*5000));
+          continue;
+        }
         body=await response.json().catch(()=>({}));
         if(event!=="FixedPriceTransaction" || Number(body.imported||0)>0 || attempt===attempts)break;
         // eBay occasionally sends the notification just before the order is

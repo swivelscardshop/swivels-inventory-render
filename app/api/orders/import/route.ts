@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { accessToken, getOpenOrders } from "@/lib/ebay";
 import { db } from "@/lib/supabase";
+import { setManaPoolInventory } from "@/lib/manapool";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -10,6 +11,29 @@ const chunks = <T,>(rows: T[], size = 100) => {
   for (let index = 0; index < rows.length; index += size) result.push(rows.slice(index, index + size));
   return result;
 };
+
+async function publishMagicQuantity(listing: any) {
+  if (listing?.game !== "magic" || !listing?.scryfall_id) return false;
+  await setManaPoolInventory([{
+    scryfall_id: String(listing.scryfall_id),
+    language_id: listing.language_id || "EN",
+    finish_id: listing.finish_id || "NF",
+    condition_id: listing.condition_id || "NM",
+    quantity: Math.max(0, Number(listing.ebay_quantity || 0)),
+    price_cents: Number(listing.ebay_quantity || 0) > 0 && listing.manapool_price_cents != null
+      ? Number(listing.manapool_price_cents)
+      : null,
+    custom_external_id: String(listing.ebay_listing_id),
+  }]);
+  await db(`marketplace_listings?id=eq.${listing.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      manapool_quantity: Math.max(0, Number(listing.ebay_quantity || 0)),
+      last_manapool_sync_at: new Date().toISOString(),
+    }),
+  });
+  return true;
+}
 
 export async function POST() {
   try {
@@ -23,7 +47,7 @@ export async function POST() {
     const itemIds = [...new Set(orders.flatMap((order: any) => openLines(order).map((line: any) => String(line.legacyItemId || ""))).filter(Boolean))];
     const storedListings: any[] = [];
     for (const group of chunks(itemIds, 150)) {
-      storedListings.push(...await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url,ebay_quantity&ebay_listing_id=in.(${group.join(",")})`));
+      storedListings.push(...await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url,ebay_quantity,game,scryfall_id,language_id,finish_id,condition_id,manapool_price_cents&ebay_listing_id=in.(${group.join(",")})`));
     }
     const listingMap = new Map(storedListings.map((row: any) => [String(row.ebay_listing_id), row]));
     let imported = 0;
@@ -73,7 +97,7 @@ export async function POST() {
               updated_at: now,
             }),
           });
-          listing = (await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url,ebay_quantity&ebay_listing_id=eq.${itemId}&limit=1`))?.[0];
+          listing = (await db(`marketplace_listings?select=id,ebay_listing_id,title,ebay_sku,image_url,ebay_quantity,game,scryfall_id,language_id,finish_id,condition_id,manapool_price_cents&ebay_listing_id=eq.${itemId}&limit=1`))?.[0];
           if (listing) listingMap.set(itemId, listing);
         }
         if (!listing) {
@@ -102,6 +126,10 @@ export async function POST() {
             method: "PATCH",
             body: JSON.stringify({ raw_payload: rawPayload, order_title: listing.title }),
           });
+          // Retrying an already-imported order must not subtract inventory a
+          // second time, but it should retry a previously failed Mana Pool
+          // publish using the quantity already stored in Supabase.
+          await publishMagicQuantity(listing);
           updated += 1;
           continue;
         }
@@ -136,6 +164,7 @@ export async function POST() {
           body:JSON.stringify({ebay_quantity:remaining,ebay_status:remaining>0?"active":"inactive",updated_at:new Date().toISOString()}),
         });
         listing.ebay_quantity=remaining;
+        await publishMagicQuantity(listing);
         imported += 1;
       }
     }

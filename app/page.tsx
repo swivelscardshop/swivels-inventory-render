@@ -347,7 +347,6 @@ export default function Home() {
               loading={duplicateLoading}
               scanned={duplicateScanned}
               scan={loadDuplicates}
-              onCombined={(matchKey) => setDuplicateGroups((current) => current.filter((group) => group.matchKey !== matchKey))}
               setMessage={setMessage}
               confirmAction={confirmAction}
             />
@@ -943,7 +942,6 @@ function Duplicates({
   loading,
   scanned,
   scan,
-  onCombined,
   setMessage,
   confirmAction,
 }: {
@@ -951,14 +949,22 @@ function Duplicates({
   loading: boolean;
   scanned: boolean;
   scan: () => Promise<void>;
-  onCombined: (matchKey: string) => void;
   setMessage: (v: string) => void;
   confirmAction: ConfirmAction;
 }) {
   const [gameTab, setGameTab] = useState<"pokemon" | "magic">("pokemon");
+  const [combiningKey, setCombiningKey] = useState<string | null>(null);
+  const [combinedKeys, setCombinedKeys] = useState<Set<string>>(() => new Set());
+  const [ignoredKeys, setIgnoredKeys] = useState<Set<string>>(() => new Set());
   const pokemonGroups = groups.filter((group: any) => group.listings?.some((listing: any) => listing.game === "pokemon"));
   const magicGroups = groups.filter((group: any) => group.listings?.some((listing: any) => listing.game === "magic"));
-  const displayedGroups = gameTab === "pokemon" ? pokemonGroups : magicGroups;
+  const displayedGroups = (gameTab === "pokemon" ? pokemonGroups : magicGroups)
+    .filter((group: any) => !ignoredKeys.has(group.matchKey));
+  const remainingGroups = displayedGroups.filter((group: any) => !combinedKeys.has(group.matchKey)).length;
+  const manualScan = async () => {
+    setCombinedKeys(new Set());
+    await scan();
+  };
   const combine = async (group: any, survivorEbayId: string) => {
     if (!(await confirmAction({
       title: "Combine duplicate listings?",
@@ -966,6 +972,7 @@ function Duplicates({
       confirmLabel: "Combine into newest",
       tone: "danger",
     }))) return;
+    setCombiningKey(group.matchKey);
     try {
       const r = await fetch("/api/duplicates", {
         method: "POST",
@@ -981,9 +988,39 @@ function Duplicates({
       setMessage(
         `Combined duplicate group. Ended ${b.ended} listing(s); survivor quantity is ${b.quantity}.`,
       );
-      onCombined(group.matchKey);
+      setCombinedKeys((current) => new Set(current).add(group.matchKey));
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Combine failed");
+    } finally {
+      setCombiningKey(null);
+    }
+  };
+  const ignorePokemonGroup = async (group: any) => {
+    if (!(await confirmAction({
+      title: "Mark as not a duplicate?",
+      message: "This Pokémon group will be removed from Duplicate Center and will stay hidden on future scans. No eBay listing, quantity, or SKU will be changed.",
+      confirmLabel: "Not a duplicate",
+    }))) return;
+    setCombiningKey(group.matchKey);
+    try {
+      const r = await fetch("/api/duplicates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "ignore",
+          game: "pokemon",
+          matchKey: group.matchKey,
+          listingEbayIds: group.listings.map((x: any) => x.ebay_listing_id),
+        }),
+      });
+      const b: any = await r.json();
+      if (!r.ok) throw new Error(b.error || "Could not dismiss this group");
+      setIgnoredKeys((current) => new Set(current).add(group.matchKey));
+      setMessage("Marked as not a duplicate. No eBay listings or SKUs were changed.");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Could not dismiss this group");
+    } finally {
+      setCombiningKey(null);
     }
   };
   return (
@@ -991,7 +1028,7 @@ function Duplicates({
       <Intro
         title="Duplicate Center"
         text="Scan eBay only when you are ready, then review and combine duplicate groups one at a time. Combining does not start another scan."
-        action={<button className="primary" disabled={loading} onClick={scan}><RefreshCw className={loading ? "spin" : ""} />{loading ? "Scanning…" : scanned ? "Scan again" : "Scan active eBay listings"}</button>}
+        action={<div className="duplicate-scan-actions">{scanned && <span className="count">{remainingGroups} remaining</span>}<button className="primary" disabled={loading || combiningKey !== null} onClick={manualScan}><RefreshCw className={loading ? "spin" : ""} />{loading ? "Scanning…" : scanned ? "Scan again" : "Scan active eBay listings"}</button></div>}
       />
       <div className="order-categories" role="tablist" aria-label="Duplicate card game">
         <button className={gameTab === "pokemon" ? "active" : ""} onClick={() => setGameTab("pokemon")}><span>Pokémon</span><b>{pokemonGroups.length}</b></button>
@@ -1000,12 +1037,23 @@ function Duplicates({
       {loading ? (
         <Empty text="Scanning active eBay listings…" />
       ) : (
-        displayedGroups.map((g: any) => (
-          <section className="panel duplicate" key={g.matchKey}>
-            <Title
-              k="DUPLICATE EBAY LISTINGS"
-              t={g.listings[0]?.title || "Duplicate card"}
-            />
+        displayedGroups.map((g: any) => {
+          const isCombining = combiningKey === g.matchKey;
+          const isCombined = combinedKeys.has(g.matchKey);
+          return <section className={`panel duplicate${isCombined ? " duplicate-combined" : ""}`} key={g.matchKey}>
+            <div className="duplicate-heading">
+              <Title
+                k="DUPLICATE EBAY LISTINGS"
+                t={g.listings[0]?.title || "Duplicate card"}
+              />
+              {gameTab === "pokemon" && !isCombined && (
+                <button className="secondary" disabled={combiningKey !== null} onClick={() => ignorePokemonGroup(g)}>
+                  Not a duplicate
+                </button>
+              )}
+            </div>
+            {isCombining && <div className="combine-status working"><RefreshCw className="spin" /><div><b>Combining listings with eBay…</b><small>Keep this page open until this group finishes.</small></div><i /></div>}
+            {isCombined && <div className="combine-status complete"><Check /><div><b>Combined successfully</b><small>The older listings ended and their SKUs were moved to the surviving listing.</small></div></div>}
             {g.listings.map((x: any, i: number) => (
               <div className="duprow" key={x.ebay_listing_id}>
                 <div>
@@ -1021,11 +1069,13 @@ function Duplicates({
                     {x.started_at ? ` · Listed ${new Date(x.started_at).toLocaleDateString()}` : ""}
                   </small>
                 </div>
-                {i === 0 && <button className="primary" onClick={() => combine(g, x.ebay_listing_id)}>Combine into newest</button>}
+                {i === 0 && (isCombined
+                  ? <span className="combined-badge"><Check /> Combined</span>
+                  : <button className="primary" disabled={combiningKey !== null} onClick={() => combine(g, x.ebay_listing_id)}>{isCombining ? <><RefreshCw className="spin" /> Combining…</> : "Combine into newest"}</button>)}
               </div>
             ))}
-          </section>
-        ))
+          </section>;
+        })
       )}
       {!loading && !scanned && (
         <Empty text="No scan has been run. Click Scan active eBay listings when you are ready." />

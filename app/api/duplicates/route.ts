@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const numericId = (value: unknown) => typeof value === "string" && /^\d+$/.test(value);
+const ignoreEventKey = (ids: string[]) => `duplicate-ignore:${[...ids].sort().join("-")}`;
 
 export async function GET() {
   try {
@@ -31,7 +32,15 @@ export async function GET() {
           return bTime - aTime || Number(b.ebay_listing_id) - Number(a.ebay_listing_id);
         }),
       }));
-    return NextResponse.json({ groups, scanned: listings.length, comparable, source: "ebay-live" });
+    const ignored = await db(
+      "sync_events?select=event_key&event_type=eq.duplicate_ignored&status=eq.processed&limit=10000",
+    );
+    const ignoredKeys = new Set((ignored || []).map((row: any) => String(row.event_key)));
+    const visibleGroups = groups.filter((group) => {
+      const ids = group.listings.map((listing: any) => String(listing.ebay_listing_id));
+      return !ignoredKeys.has(ignoreEventKey(ids));
+    });
+    return NextResponse.json({ groups: visibleGroups, scanned: listings.length, comparable, source: "ebay-live" });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Live eBay duplicate scan failed" }, { status: 500 });
   }
@@ -39,10 +48,29 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const { matchKey, survivorEbayId, listingEbayIds }: any = await request.json();
+    const { action = "combine", matchKey, survivorEbayId, listingEbayIds, game }: any = await request.json();
     const ids = Array.isArray(listingEbayIds)
       ? ([...new Set(listingEbayIds)].filter(numericId).slice(0, 20) as string[])
       : [];
+    if (action === "ignore") {
+      if (game !== "pokemon" || ids.length < 2 || typeof matchKey !== "string" || !matchKey)
+        throw new Error("Only a valid Pokémon duplicate group can be dismissed");
+      const now = new Date().toISOString();
+      await db("sync_events?on_conflict=event_key", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify({
+          source: "duplicate-center",
+          event_key: ignoreEventKey(ids),
+          event_type: "duplicate_ignored",
+          status: "processed",
+          attempts: 1,
+          payload: { match_key: matchKey, listing_ebay_ids: [...ids].sort(), game: "pokemon" },
+          processed_at: now,
+        }),
+      });
+      return NextResponse.json({ ok: true, ignored: true });
+    }
     if (!numericId(survivorEbayId) || ids.length < 2 || !ids.includes(survivorEbayId))
       throw new Error("Duplicate eBay selection could not be verified");
 
