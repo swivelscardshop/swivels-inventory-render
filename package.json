@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.11.5-exception-center.1",
+  "version": "1.11.5-ended-reconciliation.4",
   "private": true,
   "engines": {
     "node": "22.x"

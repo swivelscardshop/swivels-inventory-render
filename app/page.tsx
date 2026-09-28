@@ -381,7 +381,7 @@ export default function Home() {
             />
           )}{" "}
           {view === "manapool" && <ManaPoolPanel data={manaPool} loading={loading} notify={setMessage} confirmAction={confirmAction} />}{" "}
-          {view === "exceptions" && <ExceptionCenter data={exceptions} loading={loading} reload={loadExceptions} notify={setMessage} go={setView} />}{" "}
+          {view === "exceptions" && <ExceptionCenter data={exceptions} loading={loading} reload={loadExceptions} notify={setMessage} go={setView} confirmAction={confirmAction} />}{" "}
           {view === "settings" && <Connections s={status} />}
         </div>
       </main>
@@ -1292,13 +1292,43 @@ function CsvIntake({
     </div>
   );
 }
-function ExceptionCenter({ data, loading, reload, notify, go }: { data:any; loading:boolean; reload:()=>Promise<void>; notify:(v:string)=>void; go:(v:View)=>void }) {
+function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: { data:any; loading:boolean; reload:()=>Promise<void>; notify:(v:string)=>void; go:(v:View)=>void; confirmAction:ConfirmAction }) {
   const [retrying,setRetrying]=useState<string|null>(null);
-  const retry=async(action:string)=>{
+  const [ended,setEnded]=useState<any>(null);
+  const scanEnded=async()=>{
+    setRetrying("scan-ended");
+    try{const response=await fetch("/api/reconciliation/ended",{cache:"no-store"});const body:any=await response.json();if(!response.ok)throw new Error(body.error||"Ended listing scan failed");setEnded(body);}
+    catch(e){notify(e instanceof Error?e.message:"Ended listing scan failed");}
+    finally{setRetrying(null);}
+  };
+  const recoverEnded=async(row:any)=>{
+    setRetrying(`recover-${row.endedEbayId}`);
+    try{const response=await fetch("/api/reconciliation/ended",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(row)});const body:any=await response.json();if(!response.ok)throw new Error(body.error||"SKU recovery failed");notify(`Recovered ${body.sku} and attached it to ${body.title}.`);setEnded((current:any)=>({...current,rows:current.rows.filter((x:any)=>x.endedEbayId!==row.endedEbayId),count:Math.max(0,current.count-1)}));await reload();}
+    catch(e){notify(e instanceof Error?e.message:"SKU recovery failed");}
+    finally{setRetrying(null);}
+  };
+  const recoverAllEnded=async()=>{
+    const count=ended?.rows?.length||0;
+    if(!count||!(await confirmAction({title:"Add all safe missing SKUs?",message:`This will link ${count} reviewed SKU${count===1?"":"s"} to their exact active eBay listings in Supabase. Every match is rechecked before it is added.`,confirmLabel:"Add safe matches"})))return;
+    setRetrying("recover-all");
+    try{
+      const response=await fetch("/api/reconciliation/ended",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"apply-all"})});
+      const body:any=await response.json();if(!response.ok)throw new Error(body.error||"SKU recovery failed");
+      notify(`Added ${body.addedCount} missing SKU${body.addedCount===1?"":"s"} to Supabase${body.skippedCount?`; ${body.skippedCount} skipped after rechecking`:""}.`);
+      await scanEnded(); await reload();
+    }catch(e){notify(e instanceof Error?e.message:"SKU recovery failed");}
+    finally{setRetrying(null);}
+  };
+  const retry=async(action:string,item?:any)=>{
     if(action==="magic-mapping"){go("manapool");return;}
+    let sku="";
+    if(action==="add-missing-sku"){
+      sku=window.prompt("Enter the missing physical SKU location","")?.trim()||"";
+      if(!sku)return;
+    }
     setRetrying(action);
     try{
-      const response=await fetch("/api/exceptions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
+      const response=await fetch("/api/exceptions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,issueId:item?.issueId,sku})});
       const body:any=await response.json();
       if(!response.ok)throw new Error(body.error||"Retry failed");
       notify("Retry completed. Exception Center has been refreshed.");
@@ -1330,11 +1360,19 @@ function ExceptionCenter({ data, loading, reload, notify, go }: { data:any; load
         </div>
       </section>
       <section className="panel">
+        <div className="title"><div><small>ENDED LISTING RECONCILIATION</small><h3>Recover missing location SKUs</h3></div><div className="toolbar"><button className="secondary" disabled={retrying!==null} onClick={scanEnded}><RefreshCw className={retrying==="scan-ended"?"spin":""}/>{retrying==="scan-ended"?"Scanning…":ended?"Scan again":"Scan ended listings"}</button>{!!ended?.rows?.length&&<button className="primary" disabled={retrying!==null} onClick={recoverAllEnded}>{retrying==="recover-all"?<><RefreshCw className="spin"/>Adding…</>:"Add all safe matches"}</button>}</div></div>
+        <p className="bodycopy">Uses your September 28 ended-listing file and verifies every SKU against live eBay and Supabase data. Only an unsold SKU with one exact active-listing match is shown. Sold, existing, mismatched, and ambiguous SKUs are excluded.</p>
+        {ended&&(ended.rows?.length?<div className="exception-list">{ended.rows.map((row:any)=><article className="exception-row" key={`${row.endedEbayId}-${row.sku}`}>
+          <PackageCheck/><div><span>Missing SKU</span><b>{row.sku}</b><p>{row.endedTitle}</p><small>Ended eBay #{row.endedEbayId} → Active eBay #{row.survivorEbayId} · {row.survivorTitle}</small></div>
+          <button className="primary" disabled={retrying!==null} onClick={()=>recoverEnded(row)}>{retrying===`recover-${row.endedEbayId}`?<><RefreshCw className="spin"/>Adding…</>:"Confirm and add"}</button>
+        </article>)}</div>:<Empty text="No safe missing SKUs were found in recently ended listings."/>)}
+      </section>
+      <section className="panel">
         <Title k="OPEN EXCEPTIONS" t={`${data?.items?.length||0} item${data?.items?.length===1?"":"s"} requiring review`}/>
         {loading&&!data?<Empty text="Checking synchronization and inventory status…"/>:data?.items?.length?
           <div className="exception-list">{data.items.map((item:any)=><article className={`exception-row ${item.severity}`} key={item.id}>
             <AlertTriangle/><div><span>{item.category}</span><b>{item.title}</b><p>{item.detail}</p>{item.occurredAt&&<small>{new Date(item.occurredAt).toLocaleString()}</small>}</div>
-            {item.action&&<button className="secondary" disabled={retrying!==null} onClick={()=>retry(item.action)}>{retrying===item.action?<><RefreshCw className="spin"/>Retrying…</>:item.actionLabel}</button>}
+            {item.action&&<button className="secondary" disabled={retrying!==null} onClick={()=>retry(item.action,item)}>{retrying===item.action?<><RefreshCw className="spin"/>Working…</>:item.actionLabel}</button>}
           </article>)}</div>:<Empty text="Everything looks healthy. No open exceptions were found."/>}
       </section>
     </div>

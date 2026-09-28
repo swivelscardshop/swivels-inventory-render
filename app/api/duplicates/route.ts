@@ -47,6 +47,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  let auditKey = "";
   try {
     const { action = "combine", matchKey, survivorEbayId, listingEbayIds, game }: any = await request.json();
     const ids = Array.isArray(listingEbayIds)
@@ -92,15 +93,52 @@ export async function POST(request: Request) {
       throw new Error("For safety, duplicates can only be combined into the newest active eBay listing");
     const duplicates = group.filter((x) => x.ebay_listing_id !== survivorEbayId);
     const totalQuantity = group.reduce((sum, x) => sum + Number(x.ebay_quantity || 0), 0);
+    const records = await db(`marketplace_listings?select=id,ebay_listing_id,ebay_sku,title&ebay_listing_id=in.(${ids.join(",")})`);
+    if (records?.length !== ids.length)
+      throw new Error("One or more duplicate listings are missing from Supabase. Run Import from eBay before combining.");
+    const survivorRecord = records?.find((x: any) => String(x.ebay_listing_id) === survivorEbayId);
+    if (!survivorRecord)
+      throw new Error("The surviving listing is missing from Supabase. Run Import from eBay before combining.");
+    const duplicateRecords = (records || []).filter((x: any) => String(x.ebay_listing_id) !== survivorEbayId);
+
+    // Every active eBay listing's primary SKU must exist in Supabase before
+    // eBay is changed. The old combine flow only moved rows that happened to
+    // exist already, which could lose an older listing's location.
+    for (const listing of group) {
+      const sku = String(listing.ebay_sku || "").trim();
+      if (!sku) throw new Error(`Cannot combine ${listing.title}: its eBay listing has no custom SKU.`);
+      const record = records.find((row: any) => String(row.ebay_listing_id) === String(listing.ebay_listing_id));
+      const stored = await db(`physical_skus?select=id,listing_id,status&sku=eq.${encodeURIComponent(sku)}&limit=1`);
+      if (!stored?.length) {
+        await db("physical_skus", {
+          method: "POST",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ listing_id: record.id, sku, location_label: sku, status: "available", source: "ebay", updated_at: new Date().toISOString() }),
+        });
+      } else if (String(stored[0].listing_id) !== String(record.id)) {
+        throw new Error(`SKU ${sku} is attached to a different Supabase listing. Resolve that inventory issue before combining.`);
+      }
+    }
+    const recordIds = records.map((row: any) => row.id).join(",");
+    const storedLocations = await db(`physical_skus?select=id,sku,listing_id,status&listing_id=in.(${recordIds})&status=in.(available,allocated)`);
+    if ((storedLocations || []).length < totalQuantity)
+      throw new Error(`Combine stopped safely: eBay has quantity ${totalQuantity}, but only ${(storedLocations || []).length} physical SKU location(s) are stored. Add the missing location before combining.`);
+
+    auditKey = `duplicate-combine:${Date.now()}:${survivorEbayId}`;
+    const now = new Date().toISOString();
+    await db("sync_events", {
+      method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
+        source: "duplicate-center", event_key: auditKey, event_type: "duplicate_combine",
+        status: "pending", attempts: 1, received_at: now,
+        payload: { match_key: matchKey, survivor_ebay_id: survivorEbayId, total_quantity: totalQuantity,
+          listings: group.map((listing: any) => ({ ebay_listing_id: listing.ebay_listing_id, ebay_sku: listing.ebay_sku, quantity: listing.ebay_quantity, title: listing.title })),
+          stored_locations: storedLocations },
+      }),
+    });
 
     await reviseListingQuantity(survivorEbayId, totalQuantity);
     for (const duplicate of duplicates) await endListing(duplicate.ebay_listing_id);
 
-    const records = await db(`marketplace_listings?select=id,ebay_listing_id&ebay_listing_id=in.(${ids.join(",")})`);
-    const survivorRecord = records?.find((x: any) => String(x.ebay_listing_id) === survivorEbayId);
-    if (!survivorRecord)
-      throw new Error("eBay was updated, but the survivor is missing from Supabase. Run Import from eBay now.");
-    const duplicateRecords = (records || []).filter((x: any) => String(x.ebay_listing_id) !== survivorEbayId);
     for (const duplicate of duplicateRecords) {
       await db(`physical_skus?listing_id=eq.${duplicate.id}`, {
         method: "PATCH",
@@ -116,8 +154,15 @@ export async function POST(request: Request) {
     for (const duplicate of duplicateRecords)
       await db(`marketplace_listings?id=eq.${duplicate.id}`, { method: "DELETE" });
 
+    await db(`sync_events?event_key=eq.${encodeURIComponent(auditKey)}`, {
+      method: "PATCH", body: JSON.stringify({ status: "processed", processed_at: new Date().toISOString() }),
+    });
+
     return NextResponse.json({ ok: true, ended: duplicates.length, quantity: totalQuantity });
   } catch (error) {
+    if (auditKey) await db(`sync_events?event_key=eq.${encodeURIComponent(auditKey)}`, {
+      method: "PATCH", body: JSON.stringify({ status: "failed", error_message: error instanceof Error ? error.message : "Combine failed", processed_at: new Date().toISOString() }),
+    }).catch(() => {});
     return NextResponse.json({ error: error instanceof Error ? error.message : "Combine failed" }, { status: 400 });
   }
 }

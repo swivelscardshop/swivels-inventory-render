@@ -23,7 +23,10 @@ export async function GET() {
         id: `inventory-${row.id}`, category: "Inventory", severity: "warning",
         title: row.marketplace_listings?.title || "Inventory quantity mismatch",
         detail: `eBay quantity ${row.ebay_quantity}; stored locations ${row.active_sku_count}.`,
-        occurredAt: safeDate(row.last_seen_at), action: "full-sync", actionLabel: "Refresh from eBay",
+        occurredAt: safeDate(row.last_seen_at),
+        action: Number(row.ebay_quantity) - Number(row.active_sku_count) === 1 ? "add-missing-sku" : "full-sync",
+        actionLabel: Number(row.ebay_quantity) - Number(row.active_sku_count) === 1 ? "Add missing SKU" : "Refresh from eBay",
+        issueId: row.id,
       })),
       ...missingPull.map((row: any) => ({
         id: `order-${row.id}`, category: "Order", severity: "error",
@@ -69,8 +72,25 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const { action }: any = await request.json();
+    const { action, issueId, sku }: any = await request.json();
     let response: Response;
+    if (action === "add-missing-sku") {
+      const cleanSku = String(sku || "").trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9 _.-]{2,79}$/.test(cleanSku))
+        return NextResponse.json({ error: "Enter a valid physical SKU location" }, { status: 400 });
+      const rows = await db(`reconciliation_issues?select=id,listing_id,ebay_quantity,active_sku_count,status&id=eq.${encodeURIComponent(String(issueId || ""))}&status=eq.open&limit=1`);
+      const issue = rows?.[0];
+      if (!issue || Number(issue.ebay_quantity) - Number(issue.active_sku_count) !== 1)
+        return NextResponse.json({ error: "This issue is no longer missing exactly one SKU. Refresh Exception Center." }, { status: 409 });
+      const existing = await db(`physical_skus?select=id,listing_id,status&sku=eq.${encodeURIComponent(cleanSku)}&limit=1`);
+      if (existing?.length)
+        return NextResponse.json({ error: `SKU ${cleanSku} is already stored on another inventory record.` }, { status: 409 });
+      await db("physical_skus", { method:"POST", headers:{Prefer:"return=minimal"}, body:JSON.stringify({
+        listing_id:issue.listing_id, sku:cleanSku, location_label:cleanSku, status:"available", source:"manual_repair", updated_at:new Date().toISOString(),
+      }) });
+      await db(`reconciliation_issues?id=eq.${issue.id}`, { method:"PATCH", body:JSON.stringify({status:"resolved",last_seen_at:new Date().toISOString()}) });
+      return NextResponse.json({ ok:true, addedSku:cleanSku });
+    }
     if (action === "ebay-orders") response = await (await import("@/app/api/orders/import/route")).POST();
     else if (action === "manapool-orders") response = await (await import("@/app/api/manapool/route")).PATCH();
     else if (action === "full-sync") response = await (await import("@/app/api/sync/route")).POST();

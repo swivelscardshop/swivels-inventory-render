@@ -281,6 +281,45 @@ export async function getActiveListingCount() {
   return Number(root?.ActiveList?.PaginationResult?.TotalNumberOfEntries || 0);
 }
 
+export type EndedEbayListing = {
+  ebay_listing_id: string;
+  ebay_sku: string | null;
+  title: string;
+  condition_name: string | null;
+  match_key: string | null;
+  quantity_sold: number;
+  ended_at: string | null;
+};
+
+export async function getRecentlyEndedListings(days = 90) {
+  const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: true });
+  const results: EndedEbayListing[] = [];
+  const token = await accessToken();
+  let page = 1, more = true;
+  while (more && page <= 50) {
+    const xml = `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><UnsoldList><Include>true</Include><DurationInDays>${Math.max(1,Math.min(90,days))}</DurationInDays><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></UnsoldList><DetailLevel>ReturnAll</DetailLevel></GetMyeBaySellingRequest>`;
+    const response = await fetch("https://api.ebay.com/ws/api.dll", { method:"POST", cache:"no-store", headers:{
+      "X-EBAY-API-CALL-NAME":"GetMyeBaySelling", "X-EBAY-API-SITEID":"0", "X-EBAY-API-COMPATIBILITY-LEVEL":"1423", "X-EBAY-API-IAF-TOKEN":token, "Content-Type":"text/xml",
+    }, body:xml });
+    const text=await response.text();
+    const parsed:any=parser.parse(text)?.GetMyeBaySellingResponse;
+    if(!response.ok||!["Success","Warning"].includes(parsed?.Ack)) throw new Error("Could not read recently ended eBay listings");
+    for(const item of arr<any>(parsed?.UnsoldList?.ItemArray?.Item)){
+      const title=String(item.Title||"Untitled listing");
+      const condition=String(item.ConditionDisplayName||"")||null;
+      results.push({
+        ebay_listing_id:String(item.ItemID), ebay_sku:item.SKU?String(item.SKU):null, title,
+        condition_name:condition, match_key:cardMatchKey({title,condition})||null,
+        quantity_sold:Number(item.SellingStatus?.QuantitySold||0),
+        ended_at:item.ListingDetails?.EndTime?String(item.ListingDetails.EndTime):null,
+      });
+    }
+    const totalPages=Number(parsed?.UnsoldList?.PaginationResult?.TotalNumberOfPages||1);
+    more=page<totalPages; page+=1;
+  }
+  return results;
+}
+
 export async function configureEbayWebhooks(callbackUrl: string) {
   if (!/^https:\/\//i.test(callbackUrl)) throw new Error("eBay webhook URL must use HTTPS");
   // eBay requires the seller's event subscriptions and the application's

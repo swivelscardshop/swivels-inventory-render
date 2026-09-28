@@ -113,7 +113,7 @@ export async function POST(request: Request) {
     if (mode === "combine-conflict") {
       const ids=Array.isArray(body.listing_ids)?[...new Set(body.listing_ids.map(String))].slice(0,20):[];
       if(ids.length<2||ids.some((id:any)=>!/^[0-9a-f-]{36}$/i.test(id))) throw new Error("Conflict selection could not be verified");
-      const records=await db(`marketplace_listings?select=id,ebay_listing_id,scryfall_id,language_id,finish_id,condition_id&id=in.(${ids.join(",")})&game=eq.magic&ebay_status=eq.active`);
+      const records=await db(`marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,scryfall_id,language_id,finish_id,condition_id&id=in.(${ids.join(",")})&game=eq.magic&ebay_status=eq.active`);
       if(records?.length!==ids.length||new Set(records.map((x:any)=>manaPoolVariantPriceKey(x))).size!==1) throw new Error("These listings no longer share the same Mana Pool mapping");
       const token=await accessToken();
       const ebayIds=new Set(records.map((x:any)=>String(x.ebay_listing_id)));
@@ -121,6 +121,19 @@ export async function POST(request: Request) {
       if(live.length!==records.length) throw new Error("One or more eBay listings are no longer active. Refresh and review again.");
       live.sort((a:any,b:any)=>(Date.parse(b.started_at||"")||0)-(Date.parse(a.started_at||"")||0)||Number(b.ebay_listing_id)-Number(a.ebay_listing_id));
       const survivor=live[0],total=live.reduce((sum:number,x:any)=>sum+Number(x.ebay_quantity||0),0);
+      // Preserve every listing's primary eBay SKU before ending anything.
+      for(const listing of live){
+        const sku=String(listing.ebay_sku||"").trim();
+        if(!sku)throw new Error(`Cannot combine ${listing.title}: its eBay listing has no custom SKU.`);
+        const record=records.find((x:any)=>String(x.ebay_listing_id)===String(listing.ebay_listing_id));
+        const stored=await db(`physical_skus?select=id,listing_id&sku=eq.${encodeURIComponent(sku)}&limit=1`);
+        if(!stored?.length) await db("physical_skus",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({listing_id:record.id,sku,location_label:sku,status:"available",source:"ebay",updated_at:new Date().toISOString()})});
+        else if(String(stored[0].listing_id)!==String(record.id))throw new Error(`SKU ${sku} is attached to a different Supabase listing. Resolve it before combining.`);
+      }
+      const storedLocations=await db(`physical_skus?select=id,sku,listing_id,status&listing_id=in.(${records.map((x:any)=>x.id).join(",")})&status=in.(available,allocated)`);
+      if((storedLocations||[]).length<total)throw new Error(`Combine stopped safely: eBay has quantity ${total}, but only ${(storedLocations||[]).length} physical SKU location(s) are stored.`);
+      const auditKey=`manapool-combine:${Date.now()}:${survivor.ebay_listing_id}`,now=new Date().toISOString();
+      await db("sync_events",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({source:"manapool-conflict",event_key:auditKey,event_type:"duplicate_combine",status:"pending",attempts:1,received_at:now,payload:{survivor_ebay_id:survivor.ebay_listing_id,total_quantity:total,listings:live.map((x:any)=>({ebay_listing_id:x.ebay_listing_id,ebay_sku:x.ebay_sku,quantity:x.ebay_quantity,title:x.title})),stored_locations:storedLocations}})});
       await reviseListingQuantity(String(survivor.ebay_listing_id),total);
       for(const old of live.slice(1)) await endListing(String(old.ebay_listing_id));
       const survivorRecord=records.find((x:any)=>String(x.ebay_listing_id)===String(survivor.ebay_listing_id));
@@ -129,6 +142,7 @@ export async function POST(request: Request) {
         await db(`marketplace_listings?id=eq.${old.id}`,{method:"DELETE"});
       }
       await db(`marketplace_listings?id=eq.${survivorRecord.id}`,{method:"PATCH",body:JSON.stringify({ebay_quantity:total,updated_at:new Date().toISOString()})});
+      await db(`sync_events?event_key=eq.${encodeURIComponent(auditKey)}`,{method:"PATCH",body:JSON.stringify({status:"processed",processed_at:new Date().toISOString()})});
       return NextResponse.json({ok:true,quantity:total,ended:live.length-1,overview:await overview()});
     }
     const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,ebay_quantity,scryfall_id,language_id,finish_id,condition_id,physical_skus(sku,location_label,status)&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
