@@ -13,7 +13,10 @@ const chunks = <T,>(rows: T[], size = 100) => {
 };
 
 async function publishMagicQuantity(listing: any) {
-  if (listing?.game !== "magic" || !listing?.scryfall_id) return false;
+  // A Scryfall mapping is the durable indication that this is a Mana Pool
+  // Magic listing. Do not rely on the mutable game classification because an
+  // older import may already have marked an ended listing as "other".
+  if (!listing?.scryfall_id) return false;
   await setManaPoolInventory([{
     scryfall_id: String(listing.scryfall_id),
     language_id: listing.language_id || "EN",

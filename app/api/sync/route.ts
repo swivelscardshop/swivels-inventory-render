@@ -19,13 +19,16 @@ export async function POST() {
     const listings = await getActiveListings(token);
     if (!listings.length) throw new Error("eBay returned zero active listings. No Supabase records were changed.");
     const sellableListings = listings.filter((listing) => listing.ebay_status === "active" && listing.ebay_quantity > 0);
-    const previousMappedMagic = await dbAll("marketplace_listings?select=id,ebay_listing_id,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+    // Include every previously mapped Magic record, even when an earlier
+    // order import already marked it inactive. Those are precisely the rows
+    // that may still need a final quantity-zero publish to Mana Pool.
+    const previousMappedMagic = await dbAll("marketplace_listings?select=id,ebay_listing_id,scryfall_id,language_id,finish_id,condition_id,manapool_quantity&scryfall_id=not.is.null");
 
     // The normal import is read-only against eBay and refreshes the Supabase catalog.
     await db("marketplace_listings?ebay_status=eq.active", { method: "PATCH", body: JSON.stringify({ ebay_status: "inactive", updated_at: new Date().toISOString() }) });
-    // Remove stale Magic classifications before rebuilding them from the exact
-    // eBay Store category assigned to each current listing.
-    await db("marketplace_listings?game=eq.magic", { method: "PATCH", body: JSON.stringify({ game: "other", updated_at: new Date().toISOString() }) });
+    // Current eBay rows overwrite their classification during the upsert.
+    // Keep inactive mapped rows classified as Magic so delayed order retries
+    // can still publish their final quantity to Mana Pool.
     for (const group of chunks(listings)) {
       const databaseRows = group.map(({ started_at: _startedAt, ...listing }) => listing);
       await db("marketplace_listings?on_conflict=ebay_listing_id", {
