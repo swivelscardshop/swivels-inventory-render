@@ -84,6 +84,8 @@ export default function Home() {
     [inventory, setInventory] = useState<Listing[]>([]),
     [orders, setOrders] = useState<any[]>([]),
     [duplicateGroups, setDuplicateGroups] = useState<any[]>([]),
+    [duplicateScanned, setDuplicateScanned] = useState(false),
+    [duplicateLoading, setDuplicateLoading] = useState(false),
     [intake, setIntake] = useState<any>(null),
     [manaPool, setManaPool] = useState<any>(null),
     [q, setQ] = useState(""),
@@ -145,17 +147,18 @@ export default function Home() {
     }
   }, []);
   const loadDuplicates = useCallback(async () => {
-    setLoading(true);
+    setDuplicateLoading(true);
     try {
       const b: any = await fetch("/api/duplicates", { cache: "no-store" }).then(
         (r) => r.json(),
       );
       if (b.error) throw new Error(b.error);
       setDuplicateGroups(b.groups || []);
+      setDuplicateScanned(true);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Duplicate scan failed");
     } finally {
-      setLoading(false);
+      setDuplicateLoading(false);
     }
   }, []);
   useEffect(() => {
@@ -175,9 +178,6 @@ export default function Home() {
   useEffect(() => {
     if (view === "orders" && status.ready) loadOrders();
   }, [view, status.ready, loadOrders]);
-  useEffect(() => {
-    if (view === "duplicates" && status.ready) loadDuplicates();
-  }, [view, status.ready, loadDuplicates]);
   useEffect(() => {
     if (view !== "manapool" || !status.ready) return;
     setLoading(true);
@@ -344,8 +344,10 @@ export default function Home() {
           {view === "duplicates" && (
             <Duplicates
               groups={duplicateGroups}
-              loading={loading}
-              reload={loadDuplicates}
+              loading={duplicateLoading}
+              scanned={duplicateScanned}
+              scan={loadDuplicates}
+              onCombined={(matchKey) => setDuplicateGroups((current) => current.filter((group) => group.matchKey !== matchKey))}
               setMessage={setMessage}
               confirmAction={confirmAction}
             />
@@ -939,13 +941,17 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
 function Duplicates({
   groups,
   loading,
-  reload,
+  scanned,
+  scan,
+  onCombined,
   setMessage,
   confirmAction,
 }: {
   groups: any[];
   loading: boolean;
-  reload: () => Promise<void>;
+  scanned: boolean;
+  scan: () => Promise<void>;
+  onCombined: (matchKey: string) => void;
   setMessage: (v: string) => void;
   confirmAction: ConfirmAction;
 }) {
@@ -975,7 +981,7 @@ function Duplicates({
       setMessage(
         `Combined duplicate group. Ended ${b.ended} listing(s); survivor quantity is ${b.quantity}.`,
       );
-      await reload();
+      onCombined(group.matchKey);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Combine failed");
     }
@@ -984,8 +990,8 @@ function Duplicates({
     <div className="stack">
       <Intro
         title="Duplicate Center"
-        text="Scans every active eBay listing. Same-name cards in different conditions are treated as unique; only the same card in the same condition is flagged."
-        action={<span className="count">{displayedGroups.length} groups</span>}
+        text="Scan eBay only when you are ready, then review and combine duplicate groups one at a time. Combining does not start another scan."
+        action={<button className="primary" disabled={loading} onClick={scan}><RefreshCw className={loading ? "spin" : ""} />{loading ? "Scanning…" : scanned ? "Scan again" : "Scan active eBay listings"}</button>}
       />
       <div className="order-categories" role="tablist" aria-label="Duplicate card game">
         <button className={gameTab === "pokemon" ? "active" : ""} onClick={() => setGameTab("pokemon")}><span>Pokémon</span><b>{pokemonGroups.length}</b></button>
@@ -1021,7 +1027,10 @@ function Duplicates({
           </section>
         ))
       )}
-      {!loading && !displayedGroups.length && (
+      {!loading && !scanned && (
+        <Empty text="No scan has been run. Click Scan active eBay listings when you are ready." />
+      )}
+      {!loading && scanned && !displayedGroups.length && (
         <Empty text={`No exact duplicate active ${gameTab === "pokemon" ? "Pokémon" : "Magic"} listings were found.`} />
       )}
     </div>
