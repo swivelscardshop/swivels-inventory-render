@@ -5,9 +5,33 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const safeDate = (value: unknown) => value ? String(value) : null;
+const chunks=<T,>(rows:T[],size=100)=>Array.from({length:Math.ceil(rows.length/size)},(_,index)=>rows.slice(index*size,(index+1)*size));
+
+async function reconcileInventoryIssues(){
+  const now=new Date().toISOString();
+  const differences=await db("listing_reconciliation?select=id,ebay_quantity,active_sku_count,difference&difference=neq.0");
+
+  // reconciliation_issues is a display/work queue. Rebuild its open inventory
+  // rows from the current Supabase reconciliation view so completed combine and
+  // missing-SKU repairs disappear instead of leaving stale exceptions behind.
+  await db("reconciliation_issues?status=eq.open",{method:"PATCH",body:JSON.stringify({status:"resolved",last_seen_at:now})});
+  const issues=(differences||[]).map((row:any)=>({
+    listing_id:row.id,
+    issue_type:Number(row.difference)>0?"missing_sku":"extra_sku",
+    ebay_quantity:Number(row.ebay_quantity),
+    active_sku_count:Number(row.active_sku_count),
+    status:"open",
+    last_seen_at:now,
+    details:{difference:Number(row.difference)},
+  }));
+  for(const group of chunks(issues)){
+    await db("reconciliation_issues?on_conflict=listing_id,issue_type",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(group)});
+  }
+}
 
 export async function GET() {
   try {
+    await reconcileInventoryIssues();
     const [issues, orders, unmapped, failedEvents, secrets, latest] = await Promise.all([
       dbAll("reconciliation_issues?select=id,issue_type,ebay_quantity,active_sku_count,details,last_seen_at,marketplace_listings(title,ebay_listing_id)&status=eq.open&order=last_seen_at.desc"),
       dbAll("marketplace_orders?select=id,marketplace,marketplace_order_id,order_title,pull_sku,pull_location,ordered_at&fulfillment_status=in.(unfulfilled,processing)&refunded=eq.false&order=ordered_at.desc"),
