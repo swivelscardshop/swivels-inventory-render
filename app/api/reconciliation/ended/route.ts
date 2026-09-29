@@ -57,6 +57,14 @@ async function applyCandidate(verified:any){
   if(existing?.length)throw new Error(`SKU ${sku} is already stored`);
   const now=new Date().toISOString();
   await db("physical_skus",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({listing_id:listing.id,sku,location_label:sku,status:"available",source:"ended_listing_recovery",updated_at:now})});
+  // The SKU write and the Exception Center issue are separate records. Close
+  // the issue only after the live reconciliation view confirms the quantities
+  // now agree, so a partially repaired listing remains visible.
+  const reconciliation=(await db(`listing_reconciliation?select=id,difference,ebay_quantity,active_sku_count&id=eq.${listing.id}&limit=1`))?.[0];
+  const resolvedIssue=Number(reconciliation?.difference)===0;
+  if(resolvedIssue){
+    await db(`reconciliation_issues?listing_id=eq.${listing.id}&status=eq.open`,{method:"PATCH",body:JSON.stringify({status:"resolved",last_seen_at:now})});
+  }
   try{
     await db("sync_events",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({source:"ended-reconciliation",event_key:`ended-sku:${endedEbayId}:${sku}`,event_type:"ended_sku_recovered",status:"processed",attempts:1,payload:verified,received_at:now,processed_at:now})});
   }catch(error){
@@ -64,7 +72,7 @@ async function applyCandidate(verified:any){
     // row must not make a successful recovery appear to have failed.
     console.warn("Could not write ended-listing recovery audit",error);
   }
-  return {sku,title:listing.title,endedEbayId,survivorEbayId};
+  return {sku,title:listing.title,endedEbayId,survivorEbayId,resolvedIssue};
 }
 
 export async function POST(request:Request){
