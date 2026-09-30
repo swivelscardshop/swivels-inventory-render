@@ -809,9 +809,8 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
                     <div className="order-summary"><h3>Order #{o.marketplace_order_id}</h3><p>{o.lines.length} item{o.lines.length === 1 ? "" : "s"} · {quantity} card{quantity === 1 ? "" : "s"}</p></div>
                     <div className="order-stat"><small>ORDER TOTAL</small><b>{totalText}</b></div>
                     {o.marketplace === "manapool" && <div className="order-print-actions">
-                      <button className="secondary" onClick={()=>window.open(`/api/orders/print?type=packing&orderId=${encodeURIComponent(o.marketplace_order_id)}`,"_blank","noopener,noreferrer")}><Printer/>Print packing slip</button>
-                      <button className="secondary" disabled={shipping === o.key} onClick={()=>printManaPoolLabel(o)}><Printer/>{shipping === o.key ? "Confirming…" : "Print 4×6 label"}</button>
-                      <small>Printing the 4×6 label marks this order shipped in Mana Pool.</small>
+                      <button className="primary" onClick={()=>window.open(`/api/orders/print?type=packing&orderId=${encodeURIComponent(o.marketplace_order_id)}`,"_blank","noopener,noreferrer")}><Printer/>Packing slip</button>
+                      <button className="primary" disabled={shipping === o.key} onClick={()=>printManaPoolLabel(o)}><Printer/>{shipping === o.key ? "Confirming…" : "4×6 label"}</button>
                     </div>}
                     {o.marketplace !== "manapool" && <button className="primary wide" disabled={shipping === o.key} onClick={() => confirmShipped(o)}>
                       <PackageCheck /> {shipping === o.key ? "Confirming…" : "Confirm entire order shipped"}

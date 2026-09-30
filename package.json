@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.11.5-manapool-printing.3",
+  "version": "1.11.5-manapool-printing.5",
   "private": true,
   "engines": {
     "node": "22.x"
