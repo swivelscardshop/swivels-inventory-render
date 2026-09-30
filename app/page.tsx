@@ -11,6 +11,7 @@ import {
   MapPin,
   Menu,
   PackageCheck,
+  Printer,
   Waves,
   RefreshCw,
   Search,
@@ -766,6 +767,10 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
                     </div>
                     <div className="order-summary"><h3>Order #{o.marketplace_order_id}</h3><p>{o.lines.length} item{o.lines.length === 1 ? "" : "s"} · {quantity} card{quantity === 1 ? "" : "s"}</p></div>
                     <div className="order-stat"><small>ORDER TOTAL</small><b>{totalText}</b></div>
+                    {o.marketplace === "manapool" && <div className="order-print-actions">
+                      <button className="secondary" onClick={()=>window.open(`/api/orders/print?type=packing&orderId=${encodeURIComponent(o.marketplace_order_id)}`,"_blank","noopener,noreferrer")}><Printer/>Print packing slip</button>
+                      <button className="secondary" onClick={()=>window.open(`/api/orders/print?type=label&orderId=${encodeURIComponent(o.marketplace_order_id)}`,"_blank","noopener,noreferrer")}><Printer/>Print 4×6 label</button>
+                    </div>}
                     <button className="primary wide" disabled={shipping === o.key} onClick={() => confirmShipped(o)}>
                       <PackageCheck /> {shipping === o.key ? "Confirming…" : "Confirm entire order shipped"}
                     </button>

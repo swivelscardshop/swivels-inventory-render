@@ -18,7 +18,9 @@ const clean = (value: string) => value.toLowerCase().normalize("NFKD").replace(/
 
 export function collectorKey(value: string | null | undefined) {
   const raw = String(value || "").split("/")[0].trim().toLowerCase();
-  const match = raw.match(/^0*(\d+)([a-z]*)$/i);
+  // Scryfall prefixes token collector numbers with T (for example T005),
+  // while eBay titles and Mana Pool display the same token as 5 or 0005.
+  const match = raw.match(/^t?0*(\d+)([a-z]*)$/i);
   return match ? `${Number(match[1])}${match[2] || ""}` : clean(raw);
 }
 
@@ -68,7 +70,11 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
   const { name, number, setName } = titleIdentity(row);
   if (!name || name.length < 2) return [];
   const queryNumber = collectorKey(number);
-  const terms = [`!\"${name.replace(/\"/g, "")}\"`, queryNumber ? `cn:${queryNumber}` : ""].filter(Boolean).join(" ");
+  const isToken=/\btoken\b/i.test(name);
+  // Mana Pool/eBay commonly call this "Orc Army Token"; Scryfall's card name
+  // is "Orc Army" and its collector number is T005.
+  const lookupName=(isToken?name.replace(/\s+token\s*$/i,""):name).trim();
+  const tokenNumber=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(3,"0")}`:"";
   const headers = { "User-Agent": "SwivelsInventory/1.10.14", Accept: "application/json" };
   const get = async (url: string): Promise<any> => {
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -88,11 +94,23 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     }
     throw new Error("Scryfall lookup temporarily unavailable after retries");
   };
-  let body: any = await get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(terms)}&unique=prints`);
+  const searches=[
+    [lookupName,tokenNumber||queryNumber],
+    [lookupName,queryNumber],
+    [lookupName,""],
+    [name,queryNumber],
+  ];
+  let body:any=null;
+  for(const [searchName,searchNumber] of searches){
+    if(!searchName)continue;
+    const terms=[`!\"${searchName.replace(/\"/g,"")}\"`,searchNumber?`cn:${searchNumber}`:""].filter(Boolean).join(" ");
+    body=await get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(terms)}&unique=prints`);
+    if(body?.data?.length)break;
+  }
   // Titles sometimes contain punctuation that Scryfall's exact-search parser
   // rejects. Resolve the card name fuzzily, then load all of its printings.
   if (!body?.data?.length) {
-    const named = await get(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name.slice(0, 180))}`);
+    const named = await get(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(lookupName.slice(0, 180))}`);
     if (!named) return [];
     body = named.prints_search_uri ? await get(String(named.prints_search_uri)) : { data:[named] };
   }
