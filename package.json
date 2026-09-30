@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.11.5-manapool-printing.5",
+  "version": "1.11.5-token-mapping-fix.7",
   "private": true,
   "engines": {
     "node": "22.x"

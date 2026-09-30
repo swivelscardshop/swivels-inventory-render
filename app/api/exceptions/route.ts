@@ -10,25 +10,24 @@ const chunks=<T,>(rows:T[],size=100)=>Array.from({length:Math.ceil(rows.length/s
 
 async function reconcileInventoryIssues(){
   const now=new Date().toISOString();
-  const [differences,dismissed]=await Promise.all([
+  const [differences,dismissed,allocated]=await Promise.all([
     db("listing_reconciliation?select=id,ebay_quantity,active_sku_count,difference&difference=neq.0"),
     dbAll("reconciliation_issues?select=listing_id,issue_type&status=eq.ignored"),
+    dbAll("physical_skus?select=listing_id&status=eq.allocated"),
   ]);
   const dismissedKeys=new Set((dismissed||[]).map((row:any)=>`${row.listing_id}|${row.issue_type}`));
+  const allocatedByListing=new Map<string,number>();
+  for(const row of allocated||[]) allocatedByListing.set(String(row.listing_id),(allocatedByListing.get(String(row.listing_id))||0)+1);
 
   // reconciliation_issues is a display/work queue. Rebuild its open inventory
   // rows from the current Supabase reconciliation view so completed combine and
   // missing-SKU repairs disappear instead of leaving stale exceptions behind.
   await db("reconciliation_issues?status=eq.open",{method:"PATCH",body:JSON.stringify({status:"resolved",last_seen_at:now})});
-  const issues=(differences||[]).map((row:any)=>({
-    listing_id:row.id,
-    issue_type:Number(row.difference)>0?"missing_sku":"extra_sku",
-    ebay_quantity:Number(row.ebay_quantity),
-    active_sku_count:Number(row.active_sku_count),
-    status:"open",
-    last_seen_at:now,
-    details:{difference:Number(row.difference)},
-  })).filter((row:any)=>!dismissedKeys.has(`${row.listing_id}|${row.issue_type}`));
+  const issues=(differences||[]).map((row:any)=>{
+    const availableSkuCount=Math.max(0,Number(row.active_sku_count)-(allocatedByListing.get(String(row.id))||0));
+    const difference=Number(row.ebay_quantity)-availableSkuCount;
+    return {listing_id:row.id,issue_type:difference>0?"missing_sku":"extra_sku",ebay_quantity:Number(row.ebay_quantity),active_sku_count:availableSkuCount,status:"open",last_seen_at:now,details:{difference}};
+  }).filter((row:any)=>Number(row.details.difference)!==0&&!dismissedKeys.has(`${row.listing_id}|${row.issue_type}`));
   for(const group of chunks(issues)){
     await db("reconciliation_issues?on_conflict=listing_id,issue_type",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(group)});
   }

@@ -103,7 +103,10 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
   let body:any=null;
   for(const [searchName,searchNumber] of searches){
     if(!searchName)continue;
-    const terms=[`!\"${searchName.replace(/\"/g,"")}\"`,searchNumber?`cn:${searchNumber}`:""].filter(Boolean).join(" ");
+    // Scryfall excludes token/emblem printings from normal searches unless
+    // extras are explicitly included. Mana Pool sells those printings, so an
+    // eBay title such as "Orc Army Token 0005" must search the extras catalog.
+    const terms=[`!\"${searchName.replace(/\"/g,"")}\"`,searchNumber?`cn:${searchNumber}`:"",isToken?"include:extras":""].filter(Boolean).join(" ");
     body=await get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(terms)}&unique=prints`);
     if(body?.data?.length)break;
   }
