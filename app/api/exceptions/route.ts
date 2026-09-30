@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, dbAll } from "@/lib/supabase";
+import { endListing, reviseListingQuantity } from "@/lib/ebay";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -9,7 +10,11 @@ const chunks=<T,>(rows:T[],size=100)=>Array.from({length:Math.ceil(rows.length/s
 
 async function reconcileInventoryIssues(){
   const now=new Date().toISOString();
-  const differences=await db("listing_reconciliation?select=id,ebay_quantity,active_sku_count,difference&difference=neq.0");
+  const [differences,dismissed]=await Promise.all([
+    db("listing_reconciliation?select=id,ebay_quantity,active_sku_count,difference&difference=neq.0"),
+    dbAll("reconciliation_issues?select=listing_id,issue_type&status=eq.ignored"),
+  ]);
+  const dismissedKeys=new Set((dismissed||[]).map((row:any)=>`${row.listing_id}|${row.issue_type}`));
 
   // reconciliation_issues is a display/work queue. Rebuild its open inventory
   // rows from the current Supabase reconciliation view so completed combine and
@@ -23,7 +28,7 @@ async function reconcileInventoryIssues(){
     status:"open",
     last_seen_at:now,
     details:{difference:Number(row.difference)},
-  }));
+  })).filter((row:any)=>!dismissedKeys.has(`${row.listing_id}|${row.issue_type}`));
   for(const group of chunks(issues)){
     await db("reconciliation_issues?on_conflict=listing_id,issue_type",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(group)});
   }
@@ -51,6 +56,9 @@ export async function GET() {
         action: Number(row.ebay_quantity) - Number(row.active_sku_count) === 1 ? "add-missing-sku" : "full-sync",
         actionLabel: Number(row.ebay_quantity) - Number(row.active_sku_count) === 1 ? "Add missing SKU" : "Refresh from eBay",
         issueId: row.id,
+        ebayListingId: row.marketplace_listings?.ebay_listing_id,
+        ebayQuantity: Number(row.ebay_quantity),
+        activeSkuCount: Number(row.active_sku_count),
       })),
       ...missingPull.map((row: any) => ({
         id: `order-${row.id}`, category: "Order", severity: "error",
@@ -98,6 +106,33 @@ export async function POST(request: Request) {
   try {
     const { action, issueId, sku }: any = await request.json();
     let response: Response;
+    if (["end-listing","match-quantity","dismiss-exception"].includes(action)) {
+      const rows=await db(`reconciliation_issues?select=id,listing_id,issue_type,status,marketplace_listings(ebay_listing_id,title,ebay_status)&id=eq.${encodeURIComponent(String(issueId||""))}&status=eq.open&limit=1`);
+      const issue=rows?.[0];
+      if(!issue) return NextResponse.json({error:"This exception is no longer open. Refresh Exception Center."},{status:409});
+      const listing=issue.marketplace_listings;
+      const ebayId=String(listing?.ebay_listing_id||"");
+      const now=new Date().toISOString();
+      if(action==="dismiss-exception"){
+        await db(`reconciliation_issues?id=eq.${issue.id}`,{method:"PATCH",body:JSON.stringify({status:"ignored",last_seen_at:now})});
+        return NextResponse.json({ok:true,message:"Exception removed. No eBay listing or inventory quantity was changed."});
+      }
+      if(!/^\d+$/.test(ebayId)||listing?.ebay_status!=="active") return NextResponse.json({error:"The linked eBay listing is no longer active."},{status:409});
+      const live=(await db(`listing_reconciliation?select=id,ebay_quantity,active_sku_count,difference&id=eq.${issue.listing_id}&limit=1`))?.[0];
+      if(!live) return NextResponse.json({error:"Could not verify this listing against Supabase."},{status:409});
+      if(action==="end-listing"){
+        await endListing(ebayId);
+        await db(`marketplace_listings?id=eq.${issue.listing_id}`,{method:"PATCH",body:JSON.stringify({ebay_quantity:0,ebay_status:"inactive",updated_at:now})});
+      }else{
+        const quantity=Number(live.active_sku_count);
+        if(!Number.isInteger(quantity)||quantity<1) return NextResponse.json({error:"There are no available Supabase SKUs. Use End listing instead."},{status:409});
+        await reviseListingQuantity(ebayId,quantity);
+        await db(`marketplace_listings?id=eq.${issue.listing_id}`,{method:"PATCH",body:JSON.stringify({ebay_quantity:quantity,updated_at:now})});
+      }
+      await db(`reconciliation_issues?listing_id=eq.${issue.listing_id}&status=eq.open`,{method:"PATCH",body:JSON.stringify({status:"resolved",last_seen_at:now})});
+      await db("sync_events",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({source:"exception-center",event_key:`exception:${action}:${issue.id}:${Date.now()}`,event_type:action,status:"processed",attempts:1,payload:{issue_id:issue.id,listing_id:issue.listing_id,ebay_listing_id:ebayId,previous_ebay_quantity:Number(live.ebay_quantity),active_sku_count:Number(live.active_sku_count)},received_at:now,processed_at:now})});
+      return NextResponse.json({ok:true,message:action==="end-listing"?"eBay listing ended and exception resolved.":`eBay quantity changed to ${Number(live.active_sku_count)} and exception resolved.`});
+    }
     if (action === "add-missing-sku") {
       const cleanSku = String(sku || "").trim();
       if (!/^[A-Za-z0-9][A-Za-z0-9 _.-]{2,79}$/.test(cleanSku))

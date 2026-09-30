@@ -1336,6 +1336,21 @@ function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: {
     }catch(e){notify(e instanceof Error?e.message:"Retry failed");}
     finally{setRetrying(null);}
   };
+  const manageInventoryException=async(action:"end-listing"|"match-quantity"|"dismiss-exception",item:any)=>{
+    const options=action==="end-listing"
+      ?{title:"End this eBay listing?",message:`This will end eBay listing #${item.ebayListingId}. Its Supabase SKU records will be retained, but the listing will become inactive.`,confirmLabel:"End listing",tone:"danger" as const}
+      :action==="match-quantity"
+        ?{title:"Change the eBay quantity?",message:`This will change eBay quantity from ${item.ebayQuantity} to ${item.activeSkuCount}, matching the available SKU locations stored in Supabase.`,confirmLabel:`Set quantity to ${item.activeSkuCount}`}
+        :{title:"Remove this exception?",message:"This only dismisses the exception. It will not change eBay quantity or any Supabase SKU. The same mismatch will remain hidden on future scans.",confirmLabel:"Remove exception",tone:"danger" as const};
+    if(!(await confirmAction(options)))return;
+    setRetrying(`${action}-${item.issueId}`);
+    try{
+      const response=await fetch("/api/exceptions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,issueId:item.issueId})});
+      const body:any=await response.json();if(!response.ok)throw new Error(body.error||"Action failed");
+      notify(body.message||"Exception updated.");await reload();
+    }catch(e){notify(e instanceof Error?e.message:"Action failed");}
+    finally{setRetrying(null);}
+  };
   const health=data?.health||{};
   const stamp=(value:any)=>value?new Date(value).toLocaleString():"No event recorded";
   return (
@@ -1372,7 +1387,12 @@ function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: {
         {loading&&!data?<Empty text="Checking synchronization and inventory status…"/>:data?.items?.length?
           <div className="exception-list">{data.items.map((item:any)=><article className={`exception-row ${item.severity}`} key={item.id}>
             <AlertTriangle/><div><span>{item.category}</span><b>{item.title}</b><p>{item.detail}</p>{item.occurredAt&&<small>{new Date(item.occurredAt).toLocaleString()}</small>}</div>
-            {item.action&&<button className="secondary" disabled={retrying!==null} onClick={()=>retry(item.action,item)}>{retrying===item.action?<><RefreshCw className="spin"/>Working…</>:item.actionLabel}</button>}
+            {item.category==="Inventory"?<div className="exception-actions">
+              {item.action&&<button className="secondary" disabled={retrying!==null} onClick={()=>retry(item.action,item)}>{retrying===item.action?<><RefreshCw className="spin"/>Working…</>:item.actionLabel}</button>}
+              <button className="secondary" disabled={retrying!==null||item.activeSkuCount<1} onClick={()=>manageInventoryException("match-quantity",item)}>Set eBay qty to {item.activeSkuCount}</button>
+              <button className="secondary" disabled={retrying!==null} onClick={()=>manageInventoryException("end-listing",item)}>End listing</button>
+              <button className="secondary" disabled={retrying!==null} onClick={()=>manageInventoryException("dismiss-exception",item)}>Remove exception</button>
+            </div>:item.action&&<button className="secondary" disabled={retrying!==null} onClick={()=>retry(item.action,item)}>{retrying===item.action?<><RefreshCw className="spin"/>Working…</>:item.actionLabel}</button>}
           </article>)}</div>:<Empty text="Everything looks healthy. No open exceptions were found."/>}
       </section>
     </div>
