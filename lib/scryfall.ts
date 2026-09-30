@@ -18,6 +18,11 @@ const clean = (value: string) => value.toLowerCase().normalize("NFKD").replace(/
 
 export function collectorKey(value: string | null | undefined) {
   const raw = String(value || "").split("/")[0].trim().toLowerCase();
+  // Scryfall uses helper-card numbers such as H13-H13 while Card Uploader
+  // titles usually contain only 13. Preserve the H prefix when it exists so
+  // helper aliases can target the exact printing.
+  const helper = raw.match(/^h0*(\d+)(?:-h?0*\d+)?$/i);
+  if (helper) return `h${Number(helper[1])}`;
   // Scryfall prefixes token collector numbers with T (for example T005),
   // while eBay titles and Mana Pool display the same token as 5 or 0005.
   const match = raw.match(/^t?0*(\d+)([a-z]*)$/i);
@@ -69,11 +74,12 @@ export function titleIdentity(row: ListingIdentity) {
 export async function findScryfallCandidates(row: ListingIdentity): Promise<ScryfallCandidate[]> {
   const { name, number, setName } = titleIdentity(row);
   if (!name || name.length < 2) return [];
-  const queryNumber = collectorKey(number);
+  const isRingHelper=/^the ring helper card$/i.test(name.trim());
+  const queryNumber = isRingHelper?`h${collectorKey(number)}`:collectorKey(number);
   const isToken=/\btoken\b/i.test(name);
   // Mana Pool/eBay commonly call this "Orc Army Token"; Scryfall's card name
   // is "Orc Army" and its collector number is T005.
-  const lookupName=(isToken?name.replace(/\s+token\s*$/i,""):name).trim();
+  const lookupName=(isRingHelper?"The Ring // The Ring Tempts You":isToken?name.replace(/\s+token\s*$/i,""):name).trim();
   const tokenNumber=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(3,"0")}`:"";
   const headers = { "User-Agent": "SwivelsInventory/1.10.14", Accept: "application/json" };
   const get = async (url: string): Promise<any> => {
@@ -106,7 +112,7 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     // Scryfall excludes token/emblem printings from normal searches unless
     // extras are explicitly included. Mana Pool sells those printings, so an
     // eBay title such as "Orc Army Token 0005" must search the extras catalog.
-    const terms=[`!\"${searchName.replace(/\"/g,"")}\"`,searchNumber?`cn:${searchNumber}`:"",isToken?"include:extras":""].filter(Boolean).join(" ");
+    const terms=[`!\"${searchName.replace(/\"/g,"")}\"`,searchNumber?`cn:${searchNumber}`:"",isToken||isRingHelper?"include:extras":""].filter(Boolean).join(" ");
     body=await get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(terms)}&unique=prints`);
     if(body?.data?.length)break;
   }
@@ -120,7 +126,7 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
   const title = clean(row.title);
   const setHint = clean(setName);
   let sourceCards = body?.data || [];
-  if (number) sourceCards = sourceCards.filter((card:any) => collectorKey(card.collector_number) === collectorKey(number));
+  if (number) sourceCards = sourceCards.filter((card:any) => collectorKey(card.collector_number) === queryNumber);
   const cards = sourceCards.map((card: any) => ({
     id: String(card.id), name: String(card.name), set: String(card.set), set_name: String(card.set_name),
     collector_number: String(card.collector_number),

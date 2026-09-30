@@ -1,5 +1,17 @@
 const url = () => process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const key = () => process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const key = () => process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+const headers = (extra: HeadersInit = {}) => {
+  const apiKey = key();
+  // Supabase's current sb_secret_ keys authenticate through the apikey header
+  // and are not JWTs. Sending one as a Bearer token makes PostgREST try to
+  // decode it as a JWT. Legacy service-role JWTs still need both headers.
+  return {
+    apikey: apiKey,
+    ...(apiKey.startsWith("sb_secret_") ? {} : { Authorization: `Bearer ${apiKey}` }),
+    ...extra,
+  };
+};
 
 export function supabaseConfigured() {
   return Boolean(url() && key());
@@ -11,8 +23,7 @@ export async function db(path: string, init: RequestInit = {}) {
     ...init,
     cache: "no-store",
     headers: {
-      apikey: key(),
-      Authorization: `Bearer ${key()}`,
+      ...headers(),
       "Content-Type": "application/json",
       ...(init.headers || {}),
     },
@@ -45,10 +56,7 @@ export async function count(table: string, filter = "") {
   if (!supabaseConfigured()) return 0;
   const response = await fetch(`${url()}/rest/v1/${table}?select=id${filter}`, {
     cache: "no-store",
-    headers: {
-      apikey: key(), Authorization: `Bearer ${key()}`,
-      Prefer: "count=exact", Range: "0-0",
-    },
+    headers: headers({ Prefer: "count=exact", Range: "0-0" }),
   });
   if (!response.ok) throw new Error(`Could not count ${table}: ${await response.text()}`);
   const range = response.headers.get("content-range") || "0/0";

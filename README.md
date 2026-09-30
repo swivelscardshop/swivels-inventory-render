@@ -71,7 +71,7 @@ for a fresh installation and resets the inventory tables.
 6. Keep your existing Supabase variables:
 
        SUPABASE_URL
-       SUPABASE_SERVICE_ROLE_KEY
+       SUPABASE_SECRET_KEY (preferred sb_secret_ key) or SUPABASE_SERVICE_ROLE_KEY
 
 7. Save the variables and wait for Render to redeploy.
 8. Open the application and click **Connect eBay**.
