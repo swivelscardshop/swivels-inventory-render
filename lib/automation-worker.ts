@@ -2,7 +2,7 @@ import { db } from "@/lib/supabase";
 import { getEbayWebhookStatus, configureEbayWebhooks } from "@/lib/ebay";
 import { listManaPoolWebhooks, registerManaPoolWebhook } from "@/lib/manapool";
 
-type WorkerState = { started: boolean; queueBusy: boolean; recoveryBusy: boolean; verifyBusy: boolean };
+type WorkerState = { started: boolean; queueBusy: boolean; recoveryBusy: boolean; verifyBusy: boolean; reconciliationBusy: boolean };
 
 const globalWorker = globalThis as typeof globalThis & { __swivelsWorker?: WorkerState };
 
@@ -91,14 +91,29 @@ async function verifyTick(state: WorkerState) {
   } finally { state.verifyBusy = false; }
 }
 
+async function reconciliationTick(state: WorkerState) {
+  if (state.reconciliationBusy) return;
+  state.reconciliationBusy = true;
+  const started = new Date().toISOString();
+  try {
+    const response = await (await import("@/app/api/exceptions/route")).GET();
+    const result = await responseBody(response);
+    await save({ automation_last_reconciliation_at: started, automation_last_reconciliation_result: `ok: ${Number(result.counts?.total || 0)} item(s) need review` });
+  } catch (error) {
+    await save({ automation_last_reconciliation_at: started, automation_last_reconciliation_result: `failed: ${error instanceof Error ? error.message : "Reconciliation failed"}` }).catch(() => {});
+  } finally { state.reconciliationBusy = false; }
+}
+
 export function startAutomationWorker() {
   if (globalWorker.__swivelsWorker?.started) return;
-  const state: WorkerState = { started: true, queueBusy: false, recoveryBusy: false, verifyBusy: false };
+  const state: WorkerState = { started: true, queueBusy: false, recoveryBusy: false, verifyBusy: false, reconciliationBusy: false };
   globalWorker.__swivelsWorker = state;
   setTimeout(() => queueTick(state), 5_000).unref();
   setTimeout(() => recoveryTick(state), 12_000).unref();
   setTimeout(() => verifyTick(state), 20_000).unref();
+  setTimeout(() => reconciliationTick(state), 40_000).unref();
   setInterval(() => queueTick(state), 15_000).unref();
   setInterval(() => recoveryTick(state), 2 * 60_000).unref();
   setInterval(() => verifyTick(state), 30 * 60_000).unref();
+  setInterval(() => reconciliationTick(state), 15 * 60_000).unref();
 }
