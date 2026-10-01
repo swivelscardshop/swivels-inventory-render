@@ -92,7 +92,7 @@ export async function POST() {
     const stored: any[] = [];
     const ids = listings.map(x => x.ebay_listing_id);
     for (const group of chunks(ids, 150)) {
-      stored.push(...await db(`marketplace_listings?select=id,ebay_listing_id,match_key,title&ebay_listing_id=in.(${group.join(",")})`));
+      stored.push(...await db(`marketplace_listings?select=id,ebay_listing_id,ebay_sku,match_key,title&ebay_listing_id=in.(${group.join(",")})`));
     }
     const listingMap = new Map(stored.map(x => [String(x.ebay_listing_id), x.id]));
 
@@ -111,10 +111,13 @@ export async function POST() {
     // Attach every physical SKU from a CSV batch once its new eBay listing exists.
     const keyToIds = new Map<string, string[]>();
     for (const row of stored) if (row.match_key) keyToIds.set(row.match_key, [...(keyToIds.get(row.match_key) || []), row.id]);
-    const pending = await dbAll("pending_skus?select=id,match_key,sku,location_label&order=id.asc");
+    const primaryToIds=new Map<string,string[]>();
+    for(const row of stored)if(row.ebay_sku)primaryToIds.set(String(row.ebay_sku),[...(primaryToIds.get(String(row.ebay_sku))||[]),row.id]);
+    const pending = await dbAll("pending_skus?select=id,match_key,primary_sku,sku,location_label&order=id.asc");
     const attached: any[] = [], attachedIds: string[] = [];
     for (const row of pending || []) {
-      const matches = keyToIds.get(row.match_key) || [];
+      const direct=row.primary_sku?primaryToIds.get(String(row.primary_sku))||[]:[];
+      const matches=direct.length===1?direct:(keyToIds.get(row.match_key)||[]);
       if (matches.length !== 1) continue;
       attached.push({ listing_id: matches[0], sku: row.sku, location_label: row.location_label, status: "available", source: "csv_intake", updated_at: new Date().toISOString() });
       attachedIds.push(row.id);

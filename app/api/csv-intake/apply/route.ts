@@ -85,6 +85,7 @@ export async function POST(request: Request) {
         body: JSON.stringify(
           pending.map((x: any) => ({
             match_key: x.matchKey,
+            primary_sku: x.primarySku || x.sku,
             sku: x.sku,
             location_label: x.location || x.sku,
             source: "csv_intake",

@@ -85,6 +85,7 @@ create table pending_skus (
   match_key text not null,
   sku text not null unique,
   location_label text not null,
+  primary_sku text,
   source text not null default 'csv_intake',
   created_at timestamptz not null default now()
 );

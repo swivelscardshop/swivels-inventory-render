@@ -846,7 +846,7 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
                     const legacyItemId = line.raw_payload?.legacyItemId;
                     const image = legacyItemId ? `/api/ebay/image?itemId=${encodeURIComponent(String(legacyItemId))}` : (l?.image_url || line.raw_payload?.image_url);
                     return <div className="order-line" key={line.id}>
-                      <div className="order-card-info"><div className="card-title-hover"><h3>{line.order_title || l?.title || "Card"}</h3>{image && <div className="card-image-popover"><img src={image} alt={line.order_title || l?.title || "Card"} /></div>}</div></div>
+                      <div className="order-card-info"><div className="card-title-hover"><h3>{line.order_title || l?.title || "Card"}</h3>{image && <div className="card-image-popover"><img src={image} alt={line.order_title || l?.title || "Card"} /></div>}</div>{o.marketplace==="manapool"&&<p className="order-card-meta"><span><small>SET</small>{l?.set_name||"Not available"}</span><span><small>CONDITION</small>{l?.condition_name||l?.condition_id||"Not available"}</span></p>}</div>
                       <div className="order-stat"><small>QUANTITY</small><b>{line.quantity}</b></div>
                       <div className="location"><small>PULL LOCATION / SOLD SKU</small><b><MapPin />{line.pull_location || line.pull_sku || l?.ebay_sku || "No physical location"}</b></div>
                     </div>;
@@ -1470,6 +1470,7 @@ function SyncControl({ data, reload, notify, go, confirmAction }: { data:any; re
 function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: { data:any; loading:boolean; reload:()=>Promise<void>; notify:(v:string)=>void; go:(v:View)=>void; confirmAction:ConfirmAction }) {
   const [retrying,setRetrying]=useState<string|null>(null);
   const [ended,setEnded]=useState<any>(null);
+  const [csvRecovery,setCsvRecovery]=useState<any>(null);
   const scanEnded=async()=>{
     setRetrying("scan-ended");
     try{const response=await fetch("/api/reconciliation/ended",{cache:"no-store"});const body:any=await response.json();if(!response.ok)throw new Error(body.error||"Ended listing scan failed");setEnded(body);}
@@ -1512,6 +1513,20 @@ function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: {
     finally{setRetrying(null);}
   };
   const repairScheduledSkus=async()=>{if(!(await confirmAction({title:"Restore SKUs from eBay?",message:"This copies each active listing's existing eBay Custom Label into its missing Supabase location. Sold, allocated, blank, or conflicting SKUs stay unchanged.",confirmLabel:"Restore safe SKUs"})))return;setRetrying("repair-missing-primary-skus");try{const response=await fetch("/api/exceptions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"repair-missing-primary-skus"})}),body:any=await response.json();if(!response.ok)throw new Error(body.error||"SKU repair failed");notify(body.message);await reload();}catch(e){notify(e instanceof Error?e.message:"SKU repair failed");}finally{setRetrying(null);}};
+  const inspectRecoveryCsv=async(file?:File)=>{
+    if(!file)return;
+    setRetrying("csv-preview");setCsvRecovery(null);
+    try{const form=new FormData();form.append("file",file);const response=await fetch("/api/reconciliation/csv-recovery",{method:"POST",body:form});const body:any=await response.json();if(!response.ok)throw new Error(body.error||"CSV recovery check failed");setCsvRecovery(body);notify(body.skuCount?`Found ${body.skuCount} missing SKU${body.skuCount===1?"":"s"} ready to restore.`:"No safe missing SKUs were found in this CSV.");}
+    catch(e){notify(e instanceof Error?e.message:"CSV recovery check failed");}
+    finally{setRetrying(null);}
+  };
+  const applyRecoveryCsv=async()=>{
+    const count=csvRecovery?.skuCount||0;if(!count||!(await confirmAction({title:"Restore missing CSV SKUs?",message:`This will add ${count} missing physical SKU location${count===1?"":"s"} to their existing active eBay listings. Each listing and SKU will be checked again before it is saved.`,confirmLabel:"Restore SKUs"})))return;
+    setRetrying("csv-apply");
+    try{const response=await fetch("/api/reconciliation/csv-recovery",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:csvRecovery.recovery})});const body:any=await response.json();if(!response.ok)throw new Error(body.error||"CSV recovery failed");notify(`Restored ${body.added} missing SKU${body.added===1?"":"s"}. Repaired exceptions have been removed.`);setCsvRecovery(null);await reload();}
+    catch(e){notify(e instanceof Error?e.message:"CSV recovery failed");}
+    finally{setRetrying(null);}
+  };
   const manageInventoryException=async(action:"end-listing"|"match-quantity"|"dismiss-exception",item:any)=>{
     const options=action==="end-listing"
       ?{title:"End this eBay listing?",message:`This will end eBay listing #${item.ebayListingId}. Its Supabase SKU records will be retained, but the listing will become inactive.`,confirmLabel:"End listing",tone:"danger" as const}
@@ -1549,6 +1564,11 @@ function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: {
           <div><small>LAST EBAY WEBHOOK</small><b>{stamp(health.lastEbayWebhookAt)}</b><em>{health.lastEbayWebhookResult||"No result recorded"}</em></div>
           <div><small>LAST MANA POOL WEBHOOK</small><b>{stamp(health.lastManaPoolWebhookAt)}</b><em>{health.lastManaPoolWebhookResult||"No result recorded"}</em></div>
         </div>
+      </section>
+      <section className="panel">
+        <div className="title"><div><small>CSV SKU RECOVERY</small><h3>Restore grouped duplicate locations</h3></div><label className={`secondary csv-recovery-upload ${retrying!==null?"disabled":""}`}><FileUp/>{retrying==="csv-preview"?"Checking…":"Choose original CSV"}<input type="file" accept=".csv,text/csv" disabled={retrying!==null} onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value="";void inspectRecoveryCsv(file);}}/></label></div>
+        <p className="bodycopy">Upload the original Card Uploader CSV. The preview finds extra physical SKUs that were grouped into one eBay listing but never saved as locations. Nothing is changed until you confirm.</p>
+        {csvRecovery&&(csvRecovery.recovery?.length?<><div className="exception-list">{csvRecovery.recovery.map((row:any)=><article className="exception-row" key={row.listingId}><PackageCheck/><div><span>{row.missingSkus.length} missing SKU{row.missingSkus.length===1?"":"s"}</span><b>{row.title}</b><p>{row.missingSkus.join(" · ")}</p><small>eBay quantity {row.ebayQuantity} · {row.storedLocations} stored location{row.storedLocations===1?"":"s"}</small></div></article>)}</div><div className="csv-recovery-confirm"><button className="primary" disabled={retrying!==null} onClick={applyRecoveryCsv}>{retrying==="csv-apply"?<><RefreshCw className="spin"/>Restoring…</>:`Restore ${csvRecovery.skuCount} SKU${csvRecovery.skuCount===1?"":"s"}`}</button></div></>:<Empty text="No missing grouped SKUs were found in that CSV."/>)}
       </section>
       <section className="panel">
         <div className="title"><div><small>ENDED LISTING RECONCILIATION</small><h3>Recover missing location SKUs</h3></div><div className="toolbar"><button className="secondary" disabled={retrying!==null} onClick={scanEnded}><RefreshCw className={retrying==="scan-ended"?"spin":""}/>{retrying==="scan-ended"?"Scanning…":ended?"Scan again":"Scan ended listings"}</button>{!!ended?.rows?.length&&<button className="primary" disabled={retrying!==null} onClick={recoverAllEnded}>{retrying==="recover-all"?<><RefreshCw className="spin"/>Adding…</>:"Add all safe matches"}</button>}</div></div>
