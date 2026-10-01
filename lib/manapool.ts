@@ -189,7 +189,28 @@ export function coalesceManaPoolInventory(rows: ManaPoolScryfallInventory[]) {
 
 export async function setManaPoolInventory(rows: ManaPoolScryfallInventory[]) {
   if (!manaPoolSyncEnabled()) throw new Error("Mana Pool live sync is disabled. Set MANAPOOL_SYNC_ENABLED=true after reviewing the preview.");
-  return manaPool("/seller/inventory/scryfall_id", { method: "POST", body: JSON.stringify(coalesceManaPoolInventory(rows)) });
+  const inventory=coalesceManaPoolInventory(rows);
+  const results:any[]=[];
+  // Mana Pool rejects a full catalog replacement as one oversized/rate-heavy
+  // request. Publish modest batches and retry temporary usage-limit responses.
+  for(let offset=0;offset<inventory.length;offset+=40){
+    const batch=inventory.slice(offset,offset+40);
+    let lastError:unknown;
+    for(let attempt=0;attempt<5;attempt++){
+      try{
+        results.push(await manaPool("/seller/inventory/scryfall_id",{method:"POST",body:JSON.stringify(batch)}));
+        lastError=null;break;
+      }catch(error){
+        lastError=error;
+        const message=error instanceof Error?error.message:String(error);
+        if(!/usage limit|rate limit|too many requests|\b429\b|GetAPIAccessRules/i.test(message))throw error;
+        await new Promise(resolve=>setTimeout(resolve,Math.min(20000,1500*Math.pow(2,attempt))));
+      }
+    }
+    if(lastError)throw lastError;
+    if(offset+40<inventory.length)await new Promise(resolve=>setTimeout(resolve,750));
+  }
+  return {batches:results.length,updated:inventory.length,results};
 }
 
 export async function fulfillManaPoolOrder(id: string, tracking?: { company?: string; number?: string; url?: string }) {
