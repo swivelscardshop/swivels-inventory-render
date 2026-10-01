@@ -27,3 +27,11 @@ case the exact CSV feed/export must be made available to the worker.
 
 The UI uses representative preview records until live credentials and the new
 Supabase project are connected.
+## 1.11.5-sync-control.1
+
+- Added a dedicated Sync Control Center with live eBay and Mana Pool webhook health.
+- Records webhook processing in the existing `sync_events` audit table.
+- Added a recent event timeline with processing state, attempts, and error details.
+- Added duplicate-safe single-event and bulk failed-event retries.
+- Added on-demand quantity reconciliation and full eBay recovery import controls.
+- Sync Control refreshes its Supabase-backed status every 15 seconds; it does not poll either marketplace.

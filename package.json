@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.11.5-manapool-shipped-fix.1",
+  "version": "1.11.5-sync-control.1",
   "private": true,
   "engines": {
     "node": "22.x"

@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { after, NextResponse } from "next/server";
 import { db } from "@/lib/supabase";
+import { beginSyncEvent, finishSyncEvent, webhookEventKey } from "@/lib/sync-events";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -40,6 +41,8 @@ export async function POST(request:Request) {
   const recent = /^\d+$/.test(timestamp) && Math.abs(Date.now()/1000-Number(timestamp)) <= 300;
   const valid = event==="order_created" && recent && supplied.length===expected.length && supplied.length>0 && timingSafeEqual(Buffer.from(supplied),Buffer.from(expected));
   if (!valid) return NextResponse.json({error:"Invalid Mana Pool webhook signature"},{status:401});
+  const eventKey=webhookEventKey("manapool-webhook",event,raw);
+  await beginSyncEvent({source:"manapool-webhook",eventKey,eventType:event,payload:{bytes:raw.length}}).catch(()=>{});
   await saveResult(event,"received; processing");
   after(async()=>{
     try {
@@ -48,10 +51,14 @@ export async function POST(request:Request) {
       const body:any=await response.json().catch(()=>({}));
       if(!response.ok && response.status!==207) throw new Error(body.error||"Mana Pool order import failed");
       await saveResult(event,body.errors?.length?`failed: ${body.errors.join("; ").slice(0,400)}`:`order import completed: ${Number(body.lines||0)} line(s)`);
+      if(body.errors?.length) await finishSyncEvent(eventKey,"failed",body.errors.join("; ")).catch(()=>{});
+      else await finishSyncEvent(eventKey,"processed").catch(()=>{});
     }
     catch (error) {
       console.error("Mana Pool webhook processing failed",error);
-      await saveResult(event,`failed: ${error instanceof Error?error.message:"unknown error"}`);
+      const message=error instanceof Error?error.message:"unknown error";
+      await saveResult(event,`failed: ${message}`);
+      await finishSyncEvent(eventKey,"failed",message).catch(()=>{});
     }
   });
   return NextResponse.json({received:true});

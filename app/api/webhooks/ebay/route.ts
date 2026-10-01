@@ -1,6 +1,7 @@
 import { after, NextResponse } from "next/server";
 import { XMLParser } from "fast-xml-parser";
 import { db } from "@/lib/supabase";
+import { beginSyncEvent, finishSyncEvent, webhookEventKey } from "@/lib/sync-events";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -41,6 +42,8 @@ export async function POST(request:Request) {
     await saveResult(event,"ignored unsupported event");
     return new NextResponse("OK",{status:200,headers:{"Content-Type":"text/plain"}});
   }
+  const eventKey = webhookEventKey("ebay-webhook", event, raw);
+  await beginSyncEvent({source:"ebay-webhook",eventKey,eventType:event,payload:{bytes:raw.length}}).catch(()=>{});
   await saveResult(event,"received; processing");
   // The payload is a signal only. Inventory is rebuilt from authenticated eBay
   // APIs, so a forged request cannot supply quantities or listing data.
@@ -72,10 +75,13 @@ export async function POST(request:Request) {
       await saveResult(event,event==="FixedPriceTransaction"
         ? `order import completed: ${Number(body.imported||0)} new, ${Number(body.updated||0)} refreshed`
         : "listing import completed");
+      await finishSyncEvent(eventKey,"processed").catch(()=>{});
     }
     catch (error) {
       console.error("eBay webhook processing failed",error);
-      await saveResult(event,`failed: ${error instanceof Error?error.message:"unknown error"}`);
+      const message=error instanceof Error?error.message:"unknown error";
+      await saveResult(event,`failed: ${message}`);
+      await finishSyncEvent(eventKey,"failed",message).catch(()=>{});
     }
   });
   return new NextResponse("OK",{status:200,headers:{"Content-Type":"text/plain"}});

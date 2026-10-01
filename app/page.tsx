@@ -28,6 +28,7 @@ type View =
   | "duplicates"
   | "intake"
   | "manapool"
+  | "sync-control"
   | "exceptions"
   | "settings";
   
@@ -71,6 +72,7 @@ const nav = [
   ["duplicates", "Duplicate Center", Copy],
   ["intake", "CSV Intake", FileUp],
   ["manapool", "Mana Pool", Waves],
+  ["sync-control", "Sync Control", RefreshCw],
   ["exceptions", "Exception Center", ShieldAlert],
   ["settings", "Settings", Settings],
 ] as const;
@@ -90,6 +92,7 @@ export default function Home() {
     [duplicateLoading, setDuplicateLoading] = useState(false),
     [intake, setIntake] = useState<any>(null),
     [manaPool, setManaPool] = useState<any>(null),
+    [syncControl, setSyncControl] = useState<any>(null),
     [exceptions, setExceptions] = useState<any>(null),
     [q, setQ] = useState(""),
     [page, setPage] = useState(1),
@@ -202,6 +205,22 @@ export default function Home() {
   useEffect(() => {
     if (view === "exceptions" && status.ready) loadExceptions();
   }, [view, status.ready, loadExceptions]);
+  const loadSyncControl = useCallback(async () => {
+    try {
+      const response = await fetch("/api/sync-control", { cache: "no-store" });
+      const body: any = await response.json();
+      if (!response.ok) throw new Error(body.error || "Sync Control failed");
+      setSyncControl(body);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Sync Control failed");
+    }
+  }, []);
+  useEffect(() => {
+    if (view !== "sync-control" || !status.ready) return;
+    loadSyncControl();
+    const timer = window.setInterval(loadSyncControl, 15000);
+    return () => window.clearInterval(timer);
+  }, [view, status.ready, loadSyncControl]);
   useEffect(() => {
     if (!status.ready || !status.ebayConfigured) return;
     let stopped = false;
@@ -382,6 +401,7 @@ export default function Home() {
             />
           )}{" "}
           {view === "manapool" && <ManaPoolPanel data={manaPool} loading={loading} notify={setMessage} confirmAction={confirmAction} />}{" "}
+          {view === "sync-control" && <SyncControl data={syncControl} reload={loadSyncControl} notify={setMessage} go={setView} confirmAction={confirmAction} />}{" "}
           {view === "exceptions" && <ExceptionCenter data={exceptions} loading={loading} reload={loadExceptions} notify={setMessage} go={setView} confirmAction={confirmAction} />}{" "}
           {view === "settings" && <Connections s={status} />}
         </div>
@@ -1338,6 +1358,64 @@ function CsvIntake({
     </div>
   );
 }
+function SyncControl({ data, reload, notify, go, confirmAction }: { data:any; reload:()=>Promise<void>; notify:(v:string)=>void; go:(v:View)=>void; confirmAction:ConfirmAction }) {
+  const [working,setWorking]=useState<string|null>(null);
+  const act=async(action:string,eventId?:string)=>{
+    if(action==="full-import"&&!(await confirmAction({title:"Refresh all eBay data?",message:"This reads the current eBay catalog and open orders, updates Supabase, and runs the normal reconciliation workflow.",confirmLabel:"Refresh from eBay"})))return;
+    if(action==="retry-all"&&!(await confirmAction({title:"Retry all failed events?",message:"The app will safely rerun up to 50 failed marketplace events. Existing orders are recognized so inventory is not deducted twice.",confirmLabel:"Retry failed events"})))return;
+    setWorking(eventId||action);
+    try{
+      const response=await fetch("/api/sync-control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,eventId})});
+      const body:any=await response.json();
+      if(!response.ok&&response.status!==207)throw new Error(body.error||"Sync action failed");
+      notify(body.message||"Sync action completed.");
+      await reload();
+    }catch(e){notify(e instanceof Error?e.message:"Sync action failed");}
+    finally{setWorking(null);}
+  };
+  const summary=data?.summary||{};
+  const connections=data?.connections||{};
+  const stamp=(value:any)=>value?new Date(value).toLocaleString():"No event received yet";
+  const events=(data?.events||[]).slice(0,50);
+  return <div className="stack">
+    <Intro title="Sync Control Center" text="Monitor live marketplace events, recover failed jobs, and verify that eBay, Mana Pool, and Supabase agree." action={<button className="secondary" disabled={working!==null} onClick={reload}><RefreshCw/>Refresh status</button>}/>
+    <div className="metrics sync-metrics">
+      <Metric n={summary.pending||0} t="Processing" d="Events still running"/>
+      <Metric n={summary.failed||0} t="Failed events" d="Automatic or manual retry"/>
+      <Metric n={summary.mismatches||0} t="Quantity mismatches" d="Requires review"/>
+      <Metric n={events.filter((event:any)=>event.status==="processed").length} t="Recent successes" d="Latest 100 events"/>
+    </div>
+    <section className="panel">
+      <Title k="LIVE CONNECTIONS" t="Webhook activity received by this hosted service"/>
+      <div className="sync-connections">
+        {[{key:"ebay",name:"eBay",value:connections.ebay},{key:"manapool",name:"Mana Pool",value:connections.manapool}].map((connection:any)=><article key={connection.key} className={connection.value?.healthy?"connection-ok":"connection-wait"}>
+          <div><span className="sync-dot"/><strong>{connection.name}</strong><em>{connection.value?.healthy?"Healthy":connection.value?.lastAt?"Needs attention":"Waiting for first event"}</em></div>
+          <b>{stamp(connection.value?.lastAt)}</b>
+          <small>{connection.value?.event||"No event type"} · {connection.value?.result||"No processing result recorded"}</small>
+        </article>)}
+      </div>
+      {connections.endpoint&&<p className="sync-endpoint">Hosted receiver: {connections.endpoint}</p>}
+    </section>
+    <section className="panel">
+      <div className="title"><div><small>RECOVERY TOOLS</small><h3>Verify and repair synchronization</h3></div><div className="toolbar sync-actions">
+        <button className="secondary" disabled={working!==null} onClick={()=>act("reconcile")}><RefreshCw className={working==="reconcile"?"spin":""}/>Reconcile quantities</button>
+        <button className="secondary" disabled={working!==null||!summary.failed} onClick={()=>act("retry-all")}><RefreshCw className={working==="retry-all"?"spin":""}/>Retry all failed</button>
+        <button className="primary" disabled={working!==null} onClick={()=>act("full-import")}><RefreshCw className={working==="full-import"?"spin":""}/>Refresh from eBay</button>
+      </div></div>
+      <p className="bodycopy">Reconciliation checks stored quantities without changing a marketplace. Failed-event retries use the same duplicate-safe order import. Inventory uncertainty remains in the Exception Center for your review.</p>
+      {!!summary.mismatches&&<button className="secondary" onClick={()=>go("exceptions")}>Review {summary.mismatches} mismatch{summary.mismatches===1?"":"es"}</button>}
+    </section>
+    <section className="panel">
+      <Title k="EVENT TIMELINE" t="Latest webhook and recovery activity"/>
+      {events.length?<div className="sync-timeline">{events.map((event:any)=><article key={event.id}>
+        <span className={`event-state ${event.status}`}>{event.status}</span>
+        <div><b>{String(event.source||"sync").replaceAll("-"," ")} · {event.event_type}</b><small>{new Date(event.received_at).toLocaleString()} · Attempt {event.attempts||0}</small>{event.error_message&&<p>{event.error_message}</p>}</div>
+        {event.status==="failed"&&<button className="secondary" disabled={working!==null} onClick={()=>act("retry-one",event.id)}>{working===event.id?<><RefreshCw className="spin"/>Retrying…</>:"Retry now"}</button>}
+      </article>)}</div>:<Empty text="No live webhook events have been recorded yet. New events will appear here automatically."/>}
+    </section>
+  </div>;
+}
+
 function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: { data:any; loading:boolean; reload:()=>Promise<void>; notify:(v:string)=>void; go:(v:View)=>void; confirmAction:ConfirmAction }) {
   const [retrying,setRetrying]=useState<string|null>(null);
   const [ended,setEnded]=useState<any>(null);
