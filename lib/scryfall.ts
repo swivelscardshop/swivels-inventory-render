@@ -23,28 +23,20 @@ async function scryfallSetCatalog(get: (url: string) => Promise<any>): Promise<S
   if (setCatalogCache && setCatalogCache.expires > Date.now()) return setCatalogCache.rows;
   const body = await get("https://api.scryfall.com/sets");
   const rows: SetIdentity[] = (body?.data || []).flatMap((set: any) => {
-    const name = String(set.name || "").trim();
-    const normalized = clean(name);
-    if (!name || !normalized) return [];
-    return [{ name, normalized, words: normalized.split(" ") }];
-  }).sort((a: SetIdentity, b: SetIdentity) => b.words.length - a.words.length);
-  setCatalogCache = { expires: Date.now() + 24 * 60 * 60_000, rows };
-  return rows;
+    const name = String(set.name || "").trim(), normalized = clean(name);
+    return name && normalized ? [{ name, normalized, words: normalized.split(" ") }] : [];
+  }).sort((a:SetIdentity,b:SetIdentity)=>b.words.length-a.words.length);
+  setCatalogCache={expires:Date.now()+24*60*60_000,rows}; return rows;
 }
 
-async function inferNameAndSetWithoutNumber(rawName: string, get: (url: string) => Promise<any>) {
-  const normalized = clean(rawName);
-  const words = normalized.split(" ").filter(Boolean);
-  const sets = await scryfallSetCatalog(get);
-  const aliases = (set: SetIdentity) => {
-    const values = [set.words];
-    if (set.normalized === "the list") values.push(["the", "list", "reprints"]);
-    return values;
-  };
-  for (const set of sets) for (const suffix of aliases(set)) {
-    if (words.length <= suffix.length) continue;
-    if (!suffix.every((word, index) => words[words.length - suffix.length + index] === word)) continue;
-    return { name: words.slice(0, -suffix.length).join(" "), setName: set.name };
+async function inferNameAndSetWithoutNumber(rawName:string,get:(url:string)=>Promise<any>){
+  const words=clean(rawName).split(" ").filter(Boolean),sets=await scryfallSetCatalog(get);
+  for(const set of sets){
+    const aliases=[set.words,...(set.normalized==="the list"?[["the","list","reprints"]]:[])];
+    for(const suffix of aliases){
+      if(words.length<=suffix.length||!suffix.every((word,index)=>words[words.length-suffix.length+index]===word))continue;
+      return {name:words.slice(0,-suffix.length).join(" "),setName:set.name};
+    }
   }
   return null;
 }
@@ -109,11 +101,9 @@ export function titleIdentity(row: ListingIdentity) {
     : "";
   const tokenCard=/\btoken\b/i.test(name);
   const parsedSet=String(inferredSet || row.set_name || "").replace(/\([^)]*\)/g, " ").replace(/\s+/g," ").trim();
-  const canonicalSet=tokenCard&&/^the lord of the rings$/i.test(parsedSet)
-    ? "The Lord of the Rings: Tales of Middle-earth"
-    : parsedSet;
+  const canonicalSet=tokenCard&&/^the lord of the rings$/i.test(parsedSet)?"The Lord of the Rings: Tales of Middle-earth":parsedSet;
   return {
-    name: tokenCard ? name.replace(/\btoken\b/ig," ").replace(/\s+/g," ").trim() : name,
+    name:tokenCard?name.replace(/\btoken\b/ig," ").replace(/\s+/g," ").trim():name,
     number,
     // The title is authoritative. Some eBay item-specific imports place the
     // finish at the beginning of set_name (for example "Foil Lorwyn
@@ -146,21 +136,10 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     }
     throw new Error("Scryfall lookup temporarily unavailable after retries");
   };
-  // Titles without collector numbers still follow "Card Name | Set Name".
-  // Resolve the longest official Scryfall set-name suffix first. This keeps a
-  // card such as "Afterlife Mirage" from being fuzzily mapped to a printing
-  // in an unrelated set. If no set suffix can be proven, leave it for review.
-  if (!number && !setName) {
-    const inferred = await inferNameAndSetWithoutNumber(name, get);
-    if (!inferred) return [];
-    name = inferred.name;
-    setName = inferred.setName;
-  }
+  if(!number&&!setName){const inferred=await inferNameAndSetWithoutNumber(name,get);if(!inferred)return[];name=inferred.name;setName=inferred.setName;}
   const isRingHelper=/^the ring helper card$/i.test(name.trim());
-  const queryNumber = isRingHelper?`h${collectorKey(number)}`:collectorKey(number);
-  const isToken=/\btoken\b/i.test(String(row.title||"")) || /\btokens?\b/i.test(setName);
-  // Mana Pool/eBay commonly call this "Orc Army Token"; Scryfall's card name
-  // is "Orc Army" and token collector numbers can be stored as T0005/T005.
+  const queryNumber=isRingHelper?`h${collectorKey(number)}`:collectorKey(number);
+  const isToken=/\btoken\b/i.test(String(row.title||""))||/\btokens?\b/i.test(setName);
   const lookupName=(isRingHelper?"The Ring // The Ring Tempts You":isToken?name.replace(/\btoken\b/ig," ").replace(/\s+/g," "):name).trim();
   const tokenNumber4=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(4,"0")}`:"";
   const tokenNumber3=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(3,"0")}`:"";
@@ -171,8 +150,7 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     [lookupName,""],
     [name,queryNumber],
   ];
-  let body:any=null;
-  const tokenResults:any[]=[];
+  let body:any=null; const tokenResults:any[]=[];
   for(const [searchName,searchNumber] of searches){
     if(!searchName)continue;
     // Scryfall excludes token/emblem printings from normal searches unless
@@ -180,11 +158,7 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     // eBay title such as "Orc Army Token 0005" must search the extras catalog.
     const terms=[`!\"${searchName.replace(/\"/g,"")}\"`,searchNumber?`cn:${searchNumber}`:"",isToken||isRingHelper?"include:extras":""].filter(Boolean).join(" ");
     const result=await get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(terms)}&unique=prints`);
-    if(result?.data?.length){
-      if(isToken){
-        for(const card of result.data)if(!tokenResults.some((saved:any)=>String(saved.id)===String(card.id)))tokenResults.push(card);
-      } else { body=result;break; }
-    }
+    if(result?.data?.length){if(isToken){for(const card of result.data)if(!tokenResults.some((saved:any)=>String(saved.id)===String(card.id)))tokenResults.push(card);}else{body=result;break;}}
   }
   if(isToken&&tokenResults.length)body={data:tokenResults};
   // Titles sometimes contain punctuation that Scryfall's exact-search parser
@@ -203,16 +177,8 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     collector_number: String(card.collector_number),
     image_url: card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal || null,
   })) as ScryfallCandidate[];
-  if(setHint && !number){
-    cards=cards.filter(card=>setNamesMatch(card.set_name,setName,isToken)||setNamesMatch(String(card.set_name).split(":")[0],setName,isToken));
-  }
-  // Token names and collector numbers are reused by many products. When the
-  // title supplies a set, keep only that set family instead of presenting
-  // unrelated Spirit/Army token printings for manual review.
-  if(isToken&&setHint){
-    const matchingSet=cards.filter(card=>setNamesMatch(card.set_name,setName,true)||setNamesMatch(String(card.set_name).split(":")[0],setName,true));
-    if(matchingSet.length)cards=matchingSet;
-  }
+  if(setHint&&!number)cards=cards.filter(card=>setNamesMatch(card.set_name,setName,isToken)||setNamesMatch(String(card.set_name).split(":")[0],setName,isToken));
+  if(isToken&&setHint){const matching=cards.filter(card=>setNamesMatch(card.set_name,setName,true)||setNamesMatch(String(card.set_name).split(":")[0],setName,true));if(matching.length)cards=matching;}
   return cards.sort((a, b) => {
     const score = (candidate: ScryfallCandidate) => {
       const setName = clean(candidate.set_name);
@@ -228,7 +194,7 @@ export function chooseScryfallCandidate(row: ListingIdentity, candidates: Scryfa
   const normalize = (value:string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g," ").trim();
   const normalizedTitle = normalize(row.title);
   const parsed = titleIdentity(row);
-  const parsedIsToken=/\btoken\b/i.test(row.title) || /\btokens?\b/i.test(parsed.setName);
+  const parsedIsToken=/\btoken\b/i.test(row.title)||/\btokens?\b/i.test(parsed.setName);
   const titleMatches = candidates.filter((candidate) => {
     const setName = normalize(candidate.set_name);
     const setAlias = normalize(String(candidate.set_name).split(":")[0]);

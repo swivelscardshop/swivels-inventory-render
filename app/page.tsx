@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
-  Bell,
   Boxes,
   Check,
   Copy,
@@ -98,7 +97,6 @@ export default function Home() {
     [syncControl, setSyncControl] = useState<any>(null),
     [aging, setAging] = useState<any>(null),
     [exceptions, setExceptions] = useState<any>(null),
-    [notifications, setNotifications] = useState<any>(null),
     [q, setQ] = useState(""),
     [page, setPage] = useState(1),
     [total, setTotal] = useState(0),
@@ -122,9 +120,6 @@ export default function Home() {
       r.json(),
     );
     setStatus(s);
-  }, []);
-  const loadNotifications = useCallback(async () => {
-    try { const response=await fetch("/api/notifications",{cache:"no-store"});const body:any=await response.json();if(response.ok)setNotifications(body); } catch {}
   }, []);
   const loadInventory = useCallback(
     async (search: string, currentPage: number) => {
@@ -199,7 +194,6 @@ export default function Home() {
     const timer=window.setInterval(()=>{if(document.visibilityState==="visible")load().catch(()=>{});},15000);
     return ()=>window.clearInterval(timer);
   },[status.ready,load]);
-  useEffect(()=>{if(!status.ready)return;loadNotifications();const timer=window.setInterval(()=>{if(document.visibilityState==="visible")loadNotifications();},15000);return()=>window.clearInterval(timer);},[status.ready,loadNotifications]);
   useEffect(()=>{
     if(view!=="inventory"||!status.ready)return;
     const timer=window.setInterval(()=>{if(document.visibilityState==="visible")loadInventory(q,page);},30000);
@@ -312,7 +306,6 @@ export default function Home() {
               {id === "exceptions" && Boolean(exceptions?.counts?.total || status.issues) && (
                 <i>{exceptions?.counts?.total || status.issues}</i>
               )}
-              {id === "dashboard" && Boolean(notifications?.unread) && <i>{notifications.unread}</i>}
             </button>
           ))}
         </nav>
@@ -377,7 +370,7 @@ export default function Home() {
               </div>
             </div>
           )}
-          {view === "dashboard" && <Dashboard s={status} go={setView} notifications={notifications} reloadNotifications={loadNotifications} />}{" "}
+          {view === "dashboard" && <Dashboard s={status} go={setView} />}{" "}
           {view === "inventory" && (
             <Inventory
               rows={inventory}
@@ -478,7 +471,7 @@ function Metric({ n, t, d }: { n: number | string; t: string; d: string }) {
     </article>
   );
 }
-function Dashboard({ s, go, notifications, reloadNotifications }: { s: Status; go: (v: View) => void; notifications: any; reloadNotifications: () => Promise<void> }) {
+function Dashboard({ s, go }: { s: Status; go: (v: View) => void }) {
   const connected = s.ready && s.ebayConfigured;
   return (
     <>
@@ -562,19 +555,8 @@ function Dashboard({ s, go, notifications, reloadNotifications }: { s: Status; g
           <Empty text="No real open orders have been imported." />
         )}
       </section>
-      <NotificationCenter data={notifications} reload={reloadNotifications} go={go}/>
     </>
   );
-}
-
-function NotificationCenter({data,reload,go}:{data:any;reload:()=>Promise<void>;go:(v:View)=>void}){
-  const [working,setWorking]=useState(false);const alerts=data?.alerts||[],activity=data?.activity||[],daily=data?.daily||{};
-  const mark=async(action:"read"|"read-all",id?:string)=>{setWorking(true);try{await fetch("/api/notifications",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,id})});await reload();}finally{setWorking(false);}};
-  return <section className="panel notification-center"><div className="notification-heading"><Title k="AUTOMATION SAFETY & ALERTS" t={alerts.length?`${alerts.length} item${alerts.length===1?"":"s"} need attention`:"Everything is running normally"}/>{!!data?.unread&&<button className="secondary compact" disabled={working} onClick={()=>mark("read-all")}>Mark all read</button>}</div>
-    <div className="daily-summary"><span><small>ORDERS · 24 HOURS</small><b>{daily.orders||0}</b></span><span><small>CARDS SOLD</small><b>{daily.cards||0}</b></span><span><small>EVENTS PROCESSED</small><b>{daily.processed||0}</b></span><span><small>FAILED</small><b>{daily.failed||0}</b></span><span><small>LAST SYNCHRONIZED</small><b>{daily.lastSynchronizedAt?new Date(daily.lastSynchronizedAt).toLocaleString():"Waiting"}</b></span></div>
-    {alerts.length?<div className="notification-list">{alerts.slice(0,8).map((a:any)=><article className={`notification-row ${a.severity} ${a.read_at?"read":"unread"}`} key={a.id}><span className="notification-icon">{a.severity==="error"?<AlertTriangle/>:<Bell/>}</span><div><b>{a.title}</b><p>{a.message}</p><small>{new Date(a.last_seen_at).toLocaleString()}</small></div><div className="notification-actions">{a.category==="inventory"&&<button className="secondary compact" onClick={()=>go("exceptions")}>Review</button>}{a.category!=="inventory"&&<button className="secondary compact" onClick={()=>go("sync-control")}>Sync Control</button>}{!a.read_at&&<button className="secondary compact" disabled={working} onClick={()=>mark("read",a.id)}>Mark read</button>}</div></article>)}</div>:<div className="notification-clear"><Check/><div><b>No problems detected</b><p>eBay, Mana Pool, Supabase, and hosted automation currently agree.</p></div></div>}
-    <div className="activity-strip"><div><b>Recent activity</b><small>Permanent backend audit history</small></div><div className="activity-items">{activity.slice(0,5).map((e:any)=><span key={e.id}><Check/><b>{String(e.event_type||"event").replaceAll("_"," ")}</b><small>{e.source} · {new Date(e.processed_at||e.received_at).toLocaleString()}</small></span>)}</div></div>
-  </section>;
 }
 function Connection({
   name,
@@ -1529,16 +1511,7 @@ function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: {
     }catch(e){notify(e instanceof Error?e.message:"Retry failed");}
     finally{setRetrying(null);}
   };
-  const repairScheduledSkus=async()=>{
-    if(!(await confirmAction({title:"Restore SKUs from eBay?",message:"This will copy each active listing's existing eBay Custom Label into its missing Supabase location. Blank, sold, allocated, or conflicting SKUs will not be changed.",confirmLabel:"Restore safe SKUs"})))return;
-    setRetrying("repair-missing-primary-skus");
-    try{
-      const response=await fetch("/api/exceptions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"repair-missing-primary-skus"})});
-      const body:any=await response.json();if(!response.ok)throw new Error(body.error||"SKU repair failed");
-      notify(body.message||"Scheduled listing SKUs repaired.");await reload();
-    }catch(e){notify(e instanceof Error?e.message:"SKU repair failed");}
-    finally{setRetrying(null);}
-  };
+  const repairScheduledSkus=async()=>{if(!(await confirmAction({title:"Restore SKUs from eBay?",message:"This copies each active listing's existing eBay Custom Label into its missing Supabase location. Sold, allocated, blank, or conflicting SKUs stay unchanged.",confirmLabel:"Restore safe SKUs"})))return;setRetrying("repair-missing-primary-skus");try{const response=await fetch("/api/exceptions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"repair-missing-primary-skus"})}),body:any=await response.json();if(!response.ok)throw new Error(body.error||"SKU repair failed");notify(body.message);await reload();}catch(e){notify(e instanceof Error?e.message:"SKU repair failed");}finally{setRetrying(null);}};
   const manageInventoryException=async(action:"end-listing"|"match-quantity"|"dismiss-exception",item:any)=>{
     const options=action==="end-listing"
       ?{title:"End this eBay listing?",message:`This will end eBay listing #${item.ebayListingId}. Its Supabase SKU records will be retained, but the listing will become inactive.`,confirmLabel:"End listing",tone:"danger" as const}

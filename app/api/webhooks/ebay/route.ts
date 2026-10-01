@@ -37,8 +37,8 @@ async function saveResult(event:string,result:string) {
 
 export async function POST(request:Request) {
   const raw = await request.text();
-  const event=eventName(raw) || (/FixedPriceTransaction/i.test(raw)?"FixedPriceTransaction":/ItemListed/i.test(raw)?"ItemListed":/ItemRevised/i.test(raw)?"ItemRevised":/ItemClosed/i.test(raw)?"ItemClosed":"unknown");
-  if (!new Set(["FixedPriceTransaction","ItemListed","ItemRevised","ItemClosed"]).has(event)) {
+  const event=eventName(raw) || (/FixedPriceTransaction/i.test(raw)?"FixedPriceTransaction":/ItemListed/i.test(raw)?"ItemListed":"unknown");
+  if (!new Set(["FixedPriceTransaction","ItemListed"]).has(event)) {
     await saveResult(event,"ignored unsupported event");
     return new NextResponse("OK",{status:200,headers:{"Content-Type":"text/plain"}});
   }

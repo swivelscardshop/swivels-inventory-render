@@ -32,14 +32,12 @@ async function overview() {
     .map((x:any) => {
       const parsed = titleIdentity(x);
       const candidates = Array.isArray(x.manapool_mapping_candidates) ? x.manapool_mapping_candidates : [];
-      const candidateSets = [...new Set(candidates.map((candidate:any)=>String(candidate.set_name||"").trim()).filter(Boolean))];
-      const candidateNames = [...new Set(candidates.map((candidate:any)=>String(candidate.name||"").trim()).filter(Boolean))];
-      const resolvedSet = String(x.set_name || parsed.setName || (candidateSets.length===1?candidateSets[0]:"")).trim();
-      const resolvedName = String(x.card_name || (candidateNames.length===1?candidateNames[0]:parsed.name) || "").trim();
+      const candidateSets=[...new Set(candidates.map((c:any)=>String(c.set_name||"").trim()).filter(Boolean))],candidateNames=[...new Set(candidates.map((c:any)=>String(c.name||"").trim()).filter(Boolean))];
+      const resolvedSet=String(x.set_name||parsed.setName||(candidateSets.length===1?candidateSets[0]:"")).trim(),resolvedName=String(x.card_name||(candidateNames.length===1?candidateNames[0]:parsed.name)||"").trim();
       let reason = "No Scryfall printing matched the parsed card name and collector number.";
-      if (!resolvedName) reason = "Card name could not be parsed from the eBay title.";
-      else if (!parsed.number && candidates.length>1 && resolvedSet) reason = `${candidates.length} ${resolvedSet} art variants were found; choose the exact artwork.`;
-      else if (!parsed.number) reason = "Collector number could not be parsed from the eBay title.";
+      if(!resolvedName)reason="Card name could not be parsed from the eBay title.";
+      else if(!parsed.number&&candidates.length>1&&resolvedSet)reason=`${candidates.length} ${resolvedSet} art variants were found; choose the exact artwork.`;
+      else if(!parsed.number)reason="Collector number could not be parsed from the eBay title.";
       else if (x.manapool_mapping_status === "review" && candidates.length) reason = `${candidates.length} possible printings were found; manual selection is required.`;
       return {
         id:x.id, ebay_listing_id:x.ebay_listing_id, title:x.title, status:x.manapool_mapping_status,
@@ -82,18 +80,14 @@ export async function POST(request: Request) {
         try {
           const candidates = await findScryfallCandidates(row);
           const chosen = chooseScryfallCandidate(row, candidates);
-          const candidateSets=[...new Set(candidates.map((candidate:any)=>String(candidate.set_name||"").trim()).filter(Boolean))];
-          const candidateNames=[...new Set(candidates.map((candidate:any)=>String(candidate.name||"").trim()).filter(Boolean))];
-          const inferredIdentity={
-            ...(candidateSets.length===1&&!row.set_name?{set_name:candidateSets[0]}:{}),
-            ...(candidateNames.length===1?{card_name:candidateNames[0]}:{}),
-          };
+          const candidateSets=[...new Set(candidates.map((c:any)=>String(c.set_name||"").trim()).filter(Boolean))],candidateNames=[...new Set(candidates.map((c:any)=>String(c.name||"").trim()).filter(Boolean))];
+          const inferredIdentity={...(candidateSets.length===1&&!row.set_name?{set_name:candidateSets[0]}:{}),...(candidateNames.length===1?{card_name:candidateNames[0]}:{})};
           if (chosen) {
-            await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:chosen.id, manapool_mapping_status:"mapped", manapool_mapping_candidates:candidates, ...inferredIdentity, ...manaPoolVariant(row) }) });
+            await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:chosen.id, manapool_mapping_status:"mapped", manapool_mapping_candidates:candidates,...inferredIdentity,...manaPoolVariant(row) }) });
             matched++;
           } else {
             const status = candidates.length ? "review" : "unmatched";
-            await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ manapool_mapping_status:status, manapool_mapping_candidates:candidates, ...inferredIdentity }) });
+            await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ manapool_mapping_status:status, manapool_mapping_candidates:candidates,...inferredIdentity }) });
             candidates.length ? review++ : unmatched++;
           }
         } catch {
@@ -175,13 +169,14 @@ export async function POST(request: Request) {
       quantity:x.update.quantity, condition_id:x.update.condition_id, finish_id:x.update.finish_id,
     }));
     if (mode === "preview") return NextResponse.json({ preview:previewRows, total:priced.length, missing:missing.length, mapped:listings.length, enabled:manaPoolSyncEnabled(),conflicts });
-    if (missing.length) throw new Error(`${missing.length} mapped cards have no Mana Pool market price for their printing and finish. Run Preview changes and review them before live sync.`);
-    if (conflicts.length) throw new Error(`${conflicts.length} Mana Pool mapping conflict${conflicts.length===1?"":"s"} must be reviewed before live inventory can be synced.`);
-    const rawUpdates = priced.map((x:any) => x.update);
+    if(mode!=="auto-sync"&&missing.length)throw new Error(`${missing.length} mapped cards have no Mana Pool market price for their printing and finish. Run Preview changes and review them before live sync.`);
+    if(mode!=="auto-sync"&&conflicts.length)throw new Error(`${conflicts.length} Mana Pool mapping conflict${conflicts.length===1?"":"s"} must be reviewed before live inventory can be synced.`);
+    const conflictKeys=new Set(conflicts.map((c:any)=>String(c.key))),publishable=mode==="auto-sync"?priced.filter((x:any)=>!conflictKeys.has(manaPoolVariantPriceKey(x.listing))):priced;
+    const rawUpdates = publishable.map((x:any) => x.update);
     const updates = coalesceManaPoolInventory(rawUpdates);
-    const result = await setManaPoolInventory(updates);
-    for (const row of priced) await db(`marketplace_listings?id=eq.${row.listing.id}`, { method:"PATCH", body:JSON.stringify({ manapool_quantity:row.listing.ebay_quantity, manapool_lowest_cents:row.lowestCents, manapool_price_cents:row.update.price_cents, last_manapool_sync_at:new Date().toISOString() }) });
-    return NextResponse.json({ ok:true, updated:updates.length, combinedDuplicates:rawUpdates.length-updates.length, result });
+    const result=updates.length?await setManaPoolInventory(updates):{skipped:true};
+    for(const row of publishable)await db(`marketplace_listings?id=eq.${row.listing.id}`,{method:"PATCH",body:JSON.stringify({manapool_quantity:row.listing.ebay_quantity,manapool_lowest_cents:row.lowestCents,manapool_price_cents:row.update.price_cents,last_manapool_sync_at:new Date().toISOString()})});
+    return NextResponse.json({ok:true,updated:updates.length,combinedDuplicates:rawUpdates.length-updates.length,skippedMissingPrice:missing.length,skippedConflicts:conflicts.length,result});
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Mana Pool sync failed" }, { status: 500 }); }
 }
 

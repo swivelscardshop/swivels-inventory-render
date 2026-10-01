@@ -106,15 +106,7 @@ export async function POST(request: Request) {
   try {
     const { action, issueId, sku }: any = await request.json();
     let response: Response;
-    if (action === "repair-missing-primary-skus") {
-      const result = await repairMissingPrimarySkus();
-      await reconcileInventoryIssues();
-      return NextResponse.json({
-        ok: true,
-        ...result,
-        message: `Restored ${result.repaired} missing SKU${result.repaired === 1 ? "" : "s"} from eBay Custom Labels.${result.missingEbaySku ? ` ${result.missingEbaySku} listing${result.missingEbaySku === 1 ? " has" : "s have"} no eBay Custom Label and still need manual review.` : ""}${result.conflicts ? ` ${result.conflicts} conflicting or sold SKU${result.conflicts === 1 ? " was" : "s were"} left unchanged.` : ""}`,
-      });
-    }
+    if(action==="repair-missing-primary-skus"){const result=await repairMissingPrimarySkus();await reconcileInventoryIssues();return NextResponse.json({ok:true,...result,message:`Restored ${result.repaired} missing SKU${result.repaired===1?"":"s"} from eBay Custom Labels.`});}
     if (["end-listing","match-quantity","dismiss-exception"].includes(action)) {
       const rows=await db(`reconciliation_issues?select=id,listing_id,issue_type,status,marketplace_listings(ebay_listing_id,title,ebay_status)&id=eq.${encodeURIComponent(String(issueId||""))}&status=eq.open&limit=1`);
       const issue=rows?.[0];

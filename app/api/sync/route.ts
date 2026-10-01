@@ -48,18 +48,14 @@ export async function POST() {
 
     // Newly listed Magic singles are mapped automatically when there is one
     // unambiguous printing. Only genuinely ambiguous cards wait for review.
-    const pendingMagic = await dbAll("marketplace_listings?select=id,title,card_name,card_number,set_name,language,finish,condition_name&game=eq.magic&ebay_status=eq.active&scryfall_id=is.null&manapool_mapping_status=eq.pending&order=title.asc");
+    const pendingMagic = await dbAll("marketplace_listings?select=id,title,card_name,card_number,set_name,language,finish,condition_name&game=eq.magic&ebay_status=eq.active&scryfall_id=is.null&manapool_mapping_status=eq.pending&order=title.asc",40);
     let automaticallyMapped = 0, mappingReview = 0;
     for (const row of pendingMagic) {
       try {
         const candidates = await findScryfallCandidates(row);
         const chosen = chooseScryfallCandidate(row, candidates);
-        const candidateSets=[...new Set(candidates.map((candidate:any)=>String(candidate.set_name||"").trim()).filter(Boolean))];
-        const candidateNames=[...new Set(candidates.map((candidate:any)=>String(candidate.name||"").trim()).filter(Boolean))];
-        const inferredIdentity={
-          ...(candidateSets.length===1&&!row.set_name?{set_name:candidateSets[0]}:{}),
-          ...(candidateNames.length===1?{card_name:candidateNames[0]}:{}),
-        };
+        const candidateSets=[...new Set(candidates.map((c:any)=>String(c.set_name||"").trim()).filter(Boolean))],candidateNames=[...new Set(candidates.map((c:any)=>String(c.name||"").trim()).filter(Boolean))];
+        const inferredIdentity={...(candidateSets.length===1&&!row.set_name?{set_name:candidateSets[0]}:{}),...(candidateNames.length===1?{card_name:candidateNames[0]}:{})};
         if (chosen) {
           await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({scryfall_id:chosen.id,manapool_mapping_status:"mapped",manapool_mapping_candidates:candidates,...inferredIdentity,...manaPoolVariant(row)}) });
           automaticallyMapped++;
