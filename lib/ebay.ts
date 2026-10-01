@@ -367,6 +367,8 @@ export async function configureEbayWebhooks(callbackUrl: string) {
       <UserDeliveryPreferenceArray>
         <NotificationEnable><EventType>FixedPriceTransaction</EventType><EventEnable>Enable</EventEnable></NotificationEnable>
         <NotificationEnable><EventType>ItemListed</EventType><EventEnable>Enable</EventEnable></NotificationEnable>
+        <NotificationEnable><EventType>ItemRevised</EventType><EventEnable>Enable</EventEnable></NotificationEnable>
+        <NotificationEnable><EventType>ItemClosed</EventType><EventEnable>Enable</EventEnable></NotificationEnable>
       </UserDeliveryPreferenceArray>
     </SetNotificationPreferencesRequest>`);
   await tradingCall("SetNotificationPreferences", `<?xml version="1.0" encoding="utf-8"?>
@@ -393,8 +395,10 @@ export async function getEbayWebhookStatus(expectedUrl?:string) {
   const enabled=new Map(preferences.map((x:any)=>[xmlValue(x.EventType),xmlValue(x.EventEnable).toLowerCase()==="enable"]));
   const fixedPriceTransaction=enabled.get("FixedPriceTransaction")===true;
   const itemListed=enabled.get("ItemListed")===true;
+  const itemRevised=enabled.get("ItemRevised")===true;
+  const itemClosed=enabled.get("ItemClosed")===true;
   const urlMatches=!expectedUrl||applicationUrl.replace(/\/$/,"")===expectedUrl.replace(/\/$/,"");
-  return {live:applicationEnabled&&urlMatches&&fixedPriceTransaction&&itemListed,applicationEnabled,applicationUrl,urlMatches,fixedPriceTransaction,itemListed};
+  return {live:applicationEnabled&&urlMatches&&fixedPriceTransaction&&itemListed&&itemRevised&&itemClosed,applicationEnabled,applicationUrl,urlMatches,fixedPriceTransaction,itemListed,itemRevised,itemClosed};
 }
 
 export async function reviseListingQuantity(itemId: string, quantity: number) {

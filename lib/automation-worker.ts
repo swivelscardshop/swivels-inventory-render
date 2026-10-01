@@ -1,8 +1,9 @@
 import { db } from "@/lib/supabase";
-import { getEbayWebhookStatus, configureEbayWebhooks } from "@/lib/ebay";
+import { getEbayWebhookStatus, configureEbayWebhooks, getActiveListingCount } from "@/lib/ebay";
+import { count } from "@/lib/supabase";
 import { listManaPoolWebhooks, registerManaPoolWebhook } from "@/lib/manapool";
 
-type WorkerState = { started: boolean; queueBusy: boolean; recoveryBusy: boolean; verifyBusy: boolean; reconciliationBusy: boolean };
+type WorkerState = { started: boolean; queueBusy: boolean; recoveryBusy: boolean; verifyBusy: boolean; reconciliationBusy: boolean; catalogBusy: boolean };
 
 const globalWorker = globalThis as typeof globalThis & { __swivelsWorker?: WorkerState };
 
@@ -55,9 +56,9 @@ async function recoveryTick(state: WorkerState) {
   state.recoveryBusy = true;
   const started = new Date().toISOString();
   try {
-    const response = await (await import("@/app/api/orders/import/route")).POST();
-    const body = await responseBody(response);
-    await save({ automation_last_recovery_at: started, automation_last_recovery_result: `ok: ${Number(body.imported || 0)} imported, ${Number(body.updated || 0)} refreshed` });
+    const ebay = await responseBody(await (await import("@/app/api/orders/import/route")).POST());
+    const mana = await responseBody(await (await import("@/app/api/manapool/route")).PATCH());
+    await save({ automation_last_recovery_at: started, automation_last_recovery_result: `ok: eBay ${Number(ebay.imported || 0)} new/${Number(ebay.updated || 0)} refreshed; Mana Pool ${Number(mana.lines || 0)} line(s)` });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Automatic order recovery failed";
     await save({ automation_last_recovery_at: started, automation_last_recovery_result: `failed: ${message}` }).catch(() => {});
@@ -104,16 +105,45 @@ async function reconciliationTick(state: WorkerState) {
   } finally { state.reconciliationBusy = false; }
 }
 
+async function catalogTick(state: WorkerState) {
+  if (state.catalogBusy || state.queueBusy) return;
+  state.catalogBusy = true;
+  const checkedAt = new Date().toISOString();
+  try {
+    const [ebayCount, storedCount] = await Promise.all([
+      getActiveListingCount(),
+      count("marketplace_listings", "&ebay_status=eq.active"),
+    ]);
+    const saved=await db("app_secrets?select=value&key=eq.automation_last_full_catalog_at&limit=1");
+    const lastFull=saved?.[0]?.value?new Date(saved[0].value).getTime():0;
+    const fullDue=Date.now()-lastFull>10*60_000;
+    let result = `counts agree: ${ebayCount}`;
+    if (ebayCount !== storedCount || fullDue) {
+      const response = await (await import("@/app/api/sync/route")).POST();
+      const synced = await responseBody(response);
+      result = ebayCount !== storedCount
+        ? `drift repaired: eBay ${ebayCount}, stored ${storedCount}, imported ${Number(synced.listings || 0)}`
+        : `scheduled catalog verification: ${Number(synced.listings || ebayCount)} active`;
+      await save({automation_last_full_catalog_at:checkedAt});
+    }
+    await save({ automation_last_catalog_at: checkedAt, automation_last_catalog_result: result });
+  } catch (error) {
+    await save({ automation_last_catalog_at: checkedAt, automation_last_catalog_result: `failed: ${error instanceof Error ? error.message : "Catalog check failed"}` }).catch(() => {});
+  } finally { state.catalogBusy = false; }
+}
+
 export function startAutomationWorker() {
   if (globalWorker.__swivelsWorker?.started) return;
-  const state: WorkerState = { started: true, queueBusy: false, recoveryBusy: false, verifyBusy: false, reconciliationBusy: false };
+  const state: WorkerState = { started: true, queueBusy: false, recoveryBusy: false, verifyBusy: false, reconciliationBusy: false, catalogBusy: false };
   globalWorker.__swivelsWorker = state;
   setTimeout(() => queueTick(state), 5_000).unref();
   setTimeout(() => recoveryTick(state), 12_000).unref();
   setTimeout(() => verifyTick(state), 20_000).unref();
   setTimeout(() => reconciliationTick(state), 40_000).unref();
+  setTimeout(() => catalogTick(state), 30_000).unref();
   setInterval(() => queueTick(state), 15_000).unref();
   setInterval(() => recoveryTick(state), 2 * 60_000).unref();
   setInterval(() => verifyTick(state), 30 * 60_000).unref();
   setInterval(() => reconciliationTick(state), 15 * 60_000).unref();
+  setInterval(() => catalogTick(state), 2 * 60_000).unref();
 }
