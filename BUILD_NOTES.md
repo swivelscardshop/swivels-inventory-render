@@ -54,3 +54,13 @@ Supabase project are connected.
 - Newly recovered fulfilled orders remove their sold physical SKUs and are stored as fulfilled without reappearing in the pull queue.
 - Listing quantity is read directly from eBay during recovery, preventing double deductions after a catalog refresh.
 - Existing app orders that were later shipped on eBay are completed and their allocated SKUs are removed automatically.
+## 1.11.5-hosted-automation.1
+
+- Moved missed-order recovery and retry processing out of the browser and into the always-running Render server process.
+- Added a durable Supabase-backed event queue with atomic claims and stale-job recovery.
+- Webhooks remain the immediate primary path; the worker claims unprocessed events after 20 seconds and retries failures with backoff.
+- Added a two-minute recent-order safety check for webhook deliveries that never arrive.
+- Added automatic eBay and Mana Pool webhook verification/repair every 30 minutes.
+- Added worker heartbeat, last recovery result, and verified subscription status to Sync Control and `/api/health`.
+- Removed the order import that previously ran only when somebody opened the website.
+- Run `supabase/v1.11.5-hosted-automation.sql` once after deployment.

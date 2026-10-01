@@ -132,6 +132,10 @@ export async function POST() {
         };
 
         if (existing?.length) {
+          if(alreadyShipped&&String(existing[0].fulfillment_status)==="fulfilled"){
+            updated += 1;
+            continue;
+          }
           if(alreadyShipped&&String(existing[0].fulfillment_status)!=="fulfilled"){
             await db(`physical_skus?source_order_id=eq.${encodeURIComponent(orderId)}&listing_id=eq.${listing.id}&status=eq.allocated`,{method:"DELETE"});
             await db(`marketplace_orders?id=eq.${existing[0].id}`,{method:"PATCH",body:JSON.stringify({fulfillment_status:"fulfilled",sku_removed_at:new Date().toISOString(),raw_payload:rawPayload,order_title:listing.title})});
