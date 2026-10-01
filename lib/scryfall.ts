@@ -16,6 +16,21 @@ export type ScryfallCandidate = {
 
 const clean = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
 
+function setNamesMatch(left: string, right: string, token = false) {
+  const a = clean(left);
+  const b = clean(right);
+  if (!a || !b) return false;
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+  // eBay/Card Uploader commonly shortens this family to "The Lord of the
+  // Rings", while Scryfall and Mana Pool use "Tales of Middle-earth Tokens"
+  // or "The Lord of the Rings: Tales of Middle-earth Tokens". For token
+  // listings these names identify the same token set.
+  const lordOfRings = (value: string) =>
+    /\blord of the rings\b/.test(value) || /\btales of middle earth\b/.test(value);
+  const tokenSet = (value: string) => /\btokens?\b/.test(value);
+  return token && lordOfRings(a) && lordOfRings(b) && (tokenSet(a) || tokenSet(b));
+}
+
 export function collectorKey(value: string | null | undefined) {
   const raw = String(value || "").split("/")[0].trim().toLowerCase();
   // Scryfall uses helper-card numbers such as H13-H13 while Card Uploader
@@ -138,7 +153,7 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     const score = (candidate: ScryfallCandidate) => {
       const setName = clean(candidate.set_name);
       const setAlias = clean(candidate.set_name.split(":")[0]);
-      const hintMatches = setHint && (setName === setHint || setAlias === setHint || setName.includes(setHint) || setHint.includes(setAlias));
+      const hintMatches = setHint && (setNamesMatch(setName,setHint,isToken) || setNamesMatch(setAlias,setHint,isToken));
       return (hintMatches ? 6 : 0) + (setName && title.includes(setName) ? 3 : 0) + (number && collectorKey(candidate.collector_number) === collectorKey(number) ? 2 : 0);
     };
     return score(b) - score(a);
@@ -149,17 +164,18 @@ export function chooseScryfallCandidate(row: ListingIdentity, candidates: Scryfa
   const normalize = (value:string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g," ").trim();
   const normalizedTitle = normalize(row.title);
   const parsed = titleIdentity(row);
+  const parsedIsToken=/\btoken\b/i.test(parsed.name);
   const titleMatches = candidates.filter((candidate) => {
     const setName = normalize(candidate.set_name);
     const setAlias = normalize(String(candidate.set_name).split(":")[0]);
     const parsedSet = normalize(parsed.setName);
     const numberInTitle = collectorKey(candidate.collector_number) === collectorKey(parsed.number);
     const setInTitle = (setName && normalizedTitle.includes(setName)) || (setAlias.length >= 4 && normalizedTitle.includes(setAlias)) ||
-      (parsedSet.length >= 2 && (setName === parsedSet || setAlias === parsedSet || setName.includes(parsedSet) || parsedSet.includes(setAlias)));
+      (parsedSet.length >= 2 && (setNamesMatch(setName,parsedSet,parsedIsToken) || setNamesMatch(setAlias,parsedSet,parsedIsToken)));
     return Boolean(setInTitle && numberInTitle);
   });
   const parsedExact = candidates.filter((candidate) =>
-    normalize(candidate.set_name) === normalize(parsed.setName) && collectorKey(candidate.collector_number) === collectorKey(parsed.number)
+    setNamesMatch(candidate.set_name,parsed.setName,parsedIsToken) && collectorKey(candidate.collector_number) === collectorKey(parsed.number)
   );
   const exact = candidates.filter((candidate) => row.set_name && normalize(candidate.set_name) === normalize(String(row.set_name)) &&
     (!row.card_number || collectorKey(candidate.collector_number) === collectorKey(row.card_number)));

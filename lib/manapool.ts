@@ -197,7 +197,9 @@ export async function fulfillManaPoolOrder(id: string, tracking?: { company?: st
   return manaPool(`/seller/orders/${encodeURIComponent(id)}/fulfillment`, {
     method: "PUT",
     body: JSON.stringify({
-      status: tracking?.number ? "in_transit" : "fulfilled",
+      // Mana Pool's fulfillment API accepts "shipped" (not "fulfilled" or
+      // "in_transit"). A tracking number is optional for stamped envelopes.
+      status: "shipped",
       tracking_company: tracking?.company || null,
       tracking_number: tracking?.number || null,
       tracking_url: tracking?.url || null,
