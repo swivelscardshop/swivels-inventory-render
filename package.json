@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.11.5-supabase-auth-fix.9",
+  "version": "1.11.5-token-number-fix.10",
   "private": true,
   "engines": {
     "node": "22.x"

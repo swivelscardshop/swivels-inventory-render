@@ -78,9 +78,10 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
   const queryNumber = isRingHelper?`h${collectorKey(number)}`:collectorKey(number);
   const isToken=/\btoken\b/i.test(name);
   // Mana Pool/eBay commonly call this "Orc Army Token"; Scryfall's card name
-  // is "Orc Army" and its collector number is T005.
+  // is "Orc Army" and token collector numbers can be stored as T0005/T005.
   const lookupName=(isRingHelper?"The Ring // The Ring Tempts You":isToken?name.replace(/\s+token\s*$/i,""):name).trim();
-  const tokenNumber=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(3,"0")}`:"";
+  const tokenNumber4=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(4,"0")}`:"";
+  const tokenNumber3=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(3,"0")}`:"";
   const headers = { "User-Agent": "SwivelsInventory/1.10.14", Accept: "application/json" };
   const get = async (url: string): Promise<any> => {
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -101,7 +102,8 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     throw new Error("Scryfall lookup temporarily unavailable after retries");
   };
   const searches=[
-    [lookupName,tokenNumber||queryNumber],
+    [lookupName,tokenNumber4||queryNumber],
+    [lookupName,tokenNumber3||queryNumber],
     [lookupName,queryNumber],
     [lookupName,""],
     [name,queryNumber],
