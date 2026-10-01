@@ -26,7 +26,7 @@ export async function GET() {
   try {
     const [events, secrets, openIssues, pendingCount, failedCount, latestImport] = await Promise.all([
       db("sync_events?select=id,source,event_key,event_type,status,attempts,error_message,received_at,processed_at,payload&order=received_at.desc&limit=100"),
-      db("app_secrets?select=key,value,updated_at&key=in.(last_ebay_webhook_at,last_ebay_webhook_event,last_ebay_webhook_result,last_manapool_webhook_at,last_manapool_webhook_event,last_manapool_webhook_result,webhook_base_url)&limit=20"),
+      db("app_secrets?select=key,value,updated_at&key=in.(last_ebay_webhook_at,last_ebay_webhook_event,last_ebay_webhook_result,last_manapool_webhook_at,last_manapool_webhook_event,last_manapool_webhook_result,webhook_base_url,manapool_webhook_secret)&limit=20"),
       dbAll("reconciliation_issues?select=id&status=eq.open"),
       dbAll("sync_events?select=id&status=eq.pending"),
       dbAll("sync_events?select=id&status=eq.failed"),
@@ -44,8 +44,8 @@ export async function GET() {
         lastImportAt: latestImport?.[0]?.last_ebay_sync_at || null,
       },
       connections: {
-        ebay: { lastAt: saved.last_ebay_webhook_at || null, event: saved.last_ebay_webhook_event || null, result: ebayResult, healthy: Boolean(saved.last_ebay_webhook_at) && !isFailure(ebayResult) },
-        manapool: { lastAt: saved.last_manapool_webhook_at || null, event: saved.last_manapool_webhook_event || null, result: manaResult, healthy: Boolean(saved.last_manapool_webhook_at) && !isFailure(manaResult) },
+        ebay: { connected: Boolean(saved.webhook_base_url), lastAt: saved.last_ebay_webhook_at || null, event: saved.last_ebay_webhook_event || null, result: ebayResult, healthy: Boolean(saved.webhook_base_url) && !isFailure(ebayResult) },
+        manapool: { connected: Boolean(saved.webhook_base_url && saved.manapool_webhook_secret), lastAt: saved.last_manapool_webhook_at || null, event: saved.last_manapool_webhook_event || null, result: manaResult, healthy: Boolean(saved.webhook_base_url && saved.manapool_webhook_secret) && !isFailure(manaResult) },
         endpoint: saved.webhook_base_url || null,
       },
       events,

@@ -1389,9 +1389,9 @@ function SyncControl({ data, reload, notify, go, confirmAction }: { data:any; re
       <Title k="LIVE CONNECTIONS" t="Webhook activity received by this hosted service"/>
       <div className="sync-connections">
         {[{key:"ebay",name:"eBay",value:connections.ebay},{key:"manapool",name:"Mana Pool",value:connections.manapool}].map((connection:any)=><article key={connection.key} className={connection.value?.healthy?"connection-ok":"connection-wait"}>
-          <div><span className="sync-dot"/><strong>{connection.name}</strong><em>{connection.value?.healthy?"Healthy":connection.value?.lastAt?"Needs attention":"Waiting for first event"}</em></div>
-          <b>{stamp(connection.value?.lastAt)}</b>
-          <small>{connection.value?.event||"No event type"} · {connection.value?.result||"No processing result recorded"}</small>
+          <div><span className="sync-dot"/><strong>{connection.name}</strong><em>{connection.value?.healthy?"Connected":connection.value?.connected?"Needs attention":"Not configured"}</em></div>
+          <b>{connection.value?.lastAt?`Last event: ${stamp(connection.value.lastAt)}`:connection.value?.connected?"Connected · waiting for the next marketplace event":"Webhook setup required"}</b>
+          <small>{connection.value?.event||"No event received since Sync Control was installed"} · {connection.value?.result||"Connection remains ready"}</small>
         </article>)}
       </div>
       {connections.endpoint&&<p className="sync-endpoint">Hosted receiver: {connections.endpoint}</p>}

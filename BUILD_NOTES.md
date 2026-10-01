@@ -35,3 +35,7 @@ Supabase project are connected.
 - Added duplicate-safe single-event and bulk failed-event retries.
 - Added on-demand quantity reconciliation and full eBay recovery import controls.
 - Sync Control refreshes its Supabase-backed status every 15 seconds; it does not poll either marketplace.
+## 1.11.5-sync-control.2
+
+- Fixed Sync Control incorrectly presenting a configured eBay webhook as waiting/not connected before its first new event.
+- Connection status and latest-event activity are now displayed as separate signals.
