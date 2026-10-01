@@ -46,6 +46,23 @@ export async function POST() {
       });
     }
 
+    // Recalculate the Mana Pool variant on every eBay import, including cards
+    // mapped in an older build. A changed eBay title/condition must never keep
+    // a stale NM value in Supabase. Unknown conditions are blocked below.
+    const mappedForVariantRefresh = await dbAll("marketplace_listings?select=id,ebay_listing_id,title,language,finish,condition_name,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+    const conditionCorrections:any[]=[];
+    for(const row of mappedForVariantRefresh){
+      try{
+        const variant=manaPoolVariant(row);
+        if(row.condition_id&&String(row.condition_id)!==variant.condition_id) conditionCorrections.push({scryfall_id:String(row.scryfall_id),language_id:row.language_id||variant.language_id,finish_id:row.finish_id||variant.finish_id,condition_id:String(row.condition_id),quantity:0,price_cents:null,custom_external_id:String(row.ebay_listing_id)});
+        await db(`marketplace_listings?id=eq.${row.id}`,{method:"PATCH",body:JSON.stringify(variant)});
+        Object.assign(row,variant);
+      }catch{
+        await db(`marketplace_listings?id=eq.${row.id}`,{method:"PATCH",body:JSON.stringify({condition_id:null,manapool_mapping_status:"review"})});
+        row.condition_id=null;
+      }
+    }
+
     // Newly listed Magic singles are mapped automatically when there is one
     // unambiguous printing. Only genuinely ambiguous cards wait for review.
     const pendingMagic = await dbAll("marketplace_listings?select=id,title,card_name,card_number,set_name,language,finish,condition_name&game=eq.magic&ebay_status=eq.active&scryfall_id=is.null&manapool_mapping_status=eq.pending&order=title.asc",40);
@@ -71,7 +88,7 @@ export async function POST() {
     // that disappeared from eBay.
     let manaPoolPublished = 0;
     if (manaPoolSyncEnabled()) {
-      const activeMapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,ebay_quantity,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+      const activeMapped = await dbAll("marketplace_listings?select=id,ebay_listing_id,ebay_quantity,scryfall_id,language_id,finish_id,condition_id&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null&condition_id=not.is.null");
       const variantCounts=new Map<string,number>();
       for(const row of activeMapped) { const key=manaPoolVariantPriceKey(row); variantCounts.set(key,(variantCounts.get(key)||0)+1); }
       const priceMap = await getManaPoolSinglePricesFor(activeMapped.map((x:any)=>String(x.scryfall_id)));
@@ -81,10 +98,11 @@ export async function POST() {
         const market = priceMap.get(String(row.scryfall_id).toLowerCase());
         const lowest = market ? lowestManaPoolPriceForFinish(market,row.finish_id||"NF") : null;
         if (lowest === null) continue;
-        updates.push({scryfall_id:String(row.scryfall_id),language_id:row.language_id||"EN",finish_id:row.finish_id||"NF",condition_id:row.condition_id||"NM",quantity:Number(row.ebay_quantity||0),price_cents:manaPoolPrice(lowest),custom_external_id:String(row.ebay_listing_id)});
+        updates.push({scryfall_id:String(row.scryfall_id),language_id:row.language_id||"EN",finish_id:row.finish_id||"NF",condition_id:row.condition_id,quantity:Number(row.ebay_quantity||0),price_cents:manaPoolPrice(lowest),custom_external_id:String(row.ebay_listing_id)});
       }
       const activeIds = new Set(sellableListings.map(x=>String(x.ebay_listing_id)));
-      for (const row of previousMappedMagic.filter((x:any)=>!activeIds.has(String(x.ebay_listing_id)))) updates.push({scryfall_id:String(row.scryfall_id),language_id:row.language_id||"EN",finish_id:row.finish_id||"NF",condition_id:row.condition_id||"NM",quantity:0,price_cents:null,custom_external_id:String(row.ebay_listing_id)});
+      for (const row of previousMappedMagic.filter((x:any)=>!activeIds.has(String(x.ebay_listing_id))&&x.condition_id)) updates.push({scryfall_id:String(row.scryfall_id),language_id:row.language_id||"EN",finish_id:row.finish_id||"NF",condition_id:row.condition_id,quantity:0,price_cents:null,custom_external_id:String(row.ebay_listing_id)});
+      if(conditionCorrections.length) await setManaPoolInventory(conditionCorrections);
       if (updates.length) await setManaPoolInventory(updates);
       manaPoolPublished=updates.length;
     }

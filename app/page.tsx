@@ -846,7 +846,7 @@ function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[];
                     const legacyItemId = line.raw_payload?.legacyItemId;
                     const image = legacyItemId ? `/api/ebay/image?itemId=${encodeURIComponent(String(legacyItemId))}` : (l?.image_url || line.raw_payload?.image_url);
                     return <div className="order-line" key={line.id}>
-                      <div className="order-card-info"><div className="card-title-hover"><h3>{line.order_title || l?.title || "Card"}</h3>{image && <div className="card-image-popover"><img src={image} alt={line.order_title || l?.title || "Card"} /></div>}</div>{o.marketplace==="manapool"&&<p className="order-card-meta"><span><small>SET</small>{l?.set_name||"Not available"}</span><span><small>CONDITION</small>{l?.condition_name||l?.condition_id||"Not available"}</span></p>}</div>
+                      <div className="order-card-info"><div className="card-title-hover"><h3>{line.order_title || l?.title || "Card"}</h3>{image && <div className="card-image-popover"><img src={image} alt={line.order_title || l?.title || "Card"} /></div>}</div>{o.marketplace==="manapool"&&<p className="order-card-meta"><span><small>SET</small>{l?.set_name||"Not available"}</span><span><small>CONDITION</small>{l?.condition_id||l?.condition_name||"Not available"}</span></p>}</div>
                       <div className="order-stat"><small>QUANTITY</small><b>{line.quantity}</b></div>
                       <div className="location"><small>PULL LOCATION / SOLD SKU</small><b><MapPin />{line.pull_location || line.pull_sku || l?.ebay_sku || "No physical location"}</b></div>
                     </div>;

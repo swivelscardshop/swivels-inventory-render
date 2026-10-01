@@ -217,7 +217,9 @@ export function manaPoolVariant(row: { title:string; language?:string|null; fini
   const condition = String(row.condition_name || "").toLowerCase();
   const language = String(row.language || "").toLowerCase();
   const finish = String(row.finish || "").toLowerCase();
-  const condition_id = /damaged|\bdmg\b/.test(condition + " " + title) ? "DMG" : /heavy|\bhp\b/.test(condition + " " + title) ? "HP" : /moderate|\bmp\b/.test(condition + " " + title) ? "MP" : /light|\blp\b/.test(condition + " " + title) ? "LP" : "NM";
+  const conditionText = condition + " " + title;
+  const condition_id = /damaged|\bdmg\b/.test(conditionText) ? "DMG" : /heavy|\bhp\b/.test(conditionText) ? "HP" : /moderate|\bmp\b/.test(conditionText) ? "MP" : /light|\blp\b/.test(conditionText) ? "LP" : /near mint|\bnm\b/.test(conditionText) ? "NM" : null;
+  if (!condition_id) throw new Error(`Mana Pool condition is missing or unrecognized for: ${row.title}`);
   const language_id = /japanese|\bjp\b/.test(language + " " + title) ? "JA" : "EN";
   const finish_id = /etched/.test(finish + " " + title) ? "EF" : /foil/.test(finish + " " + title) && !/non[- ]?foil/.test(finish + " " + title) ? "FO" : "NF";
   return { condition_id, language_id, finish_id };

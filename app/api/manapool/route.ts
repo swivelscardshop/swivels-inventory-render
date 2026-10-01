@@ -16,7 +16,7 @@ function mappingConflicts(rows:any[]) {
     key,
     scryfall_id:listings[0].scryfall_id,
     language_id:listings[0].language_id||"EN",
-    condition_id:listings[0].condition_id||"NM",
+    condition_id:listings[0].condition_id||"UNKNOWN",
     finish_id:listings[0].finish_id||"NF",
     listings:listings.map((x:any)=>({
       id:x.id,ebay_listing_id:x.ebay_listing_id,title:x.title,ebay_sku:x.ebay_sku,
@@ -150,7 +150,12 @@ export async function POST(request: Request) {
       await db(`sync_events?event_key=eq.${encodeURIComponent(auditKey)}`,{method:"PATCH",body:JSON.stringify({status:"processed",processed_at:new Date().toISOString()})});
       return NextResponse.json({ok:true,quantity:total,ended:live.length-1,overview:await overview()});
     }
-    const listings = await dbAll("marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,ebay_quantity,scryfall_id,language_id,finish_id,condition_id,physical_skus(sku,location_label,status)&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+    const rawListings = await dbAll("marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,language,finish,condition_name,ebay_quantity,scryfall_id,language_id,finish_id,condition_id,physical_skus(sku,location_label,status)&game=eq.magic&ebay_status=eq.active&scryfall_id=not.is.null");
+    const listings:any[]=[];
+    for(const row of rawListings){
+      try{const variant=manaPoolVariant(row);if(row.condition_id!==variant.condition_id||row.language_id!==variant.language_id||row.finish_id!==variant.finish_id)await db(`marketplace_listings?id=eq.${row.id}`,{method:"PATCH",body:JSON.stringify(variant)});listings.push({...row,...variant});}
+      catch{await db(`marketplace_listings?id=eq.${row.id}`,{method:"PATCH",body:JSON.stringify({condition_id:null,manapool_mapping_status:"review"})});}
+    }
     const conflicts=mappingConflicts(listings);
     const pricesByScryfall = await getManaPoolSinglePricesFor(listings.map((x:any) => String(x.scryfall_id)));
     const priced = listings.flatMap((x:any) => {
@@ -158,7 +163,7 @@ export async function POST(request: Request) {
       const lowestCents = market ? lowestManaPoolPriceForFinish(market, x.finish_id || "NF") : null;
       if (lowestCents === null) return [];
       return [{ listing:x, lowestCents, update:{
-        scryfall_id:String(x.scryfall_id), language_id:x.language_id || "EN", finish_id:x.finish_id || "NF", condition_id:x.condition_id || "NM",
+        scryfall_id:String(x.scryfall_id), language_id:x.language_id || "EN", finish_id:x.finish_id || "NF", condition_id:x.condition_id,
         quantity:Number(x.ebay_quantity || 0), price_cents:manaPoolPrice(lowestCents), custom_external_id:String(x.ebay_listing_id),
       }}];
     });

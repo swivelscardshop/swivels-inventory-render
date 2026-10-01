@@ -129,7 +129,7 @@ export function manaPoolVariantPriceKey(value: {
   condition_id?: string | null;
   finish_id?: string | null;
 }) {
-  return [value.scryfall_id, value.language_id || "EN", value.condition_id || "NM", value.finish_id || "NF"]
+  return [value.scryfall_id, value.language_id || "EN", value.condition_id || "UNKNOWN", value.finish_id || "NF"]
     .map((part) => String(part).trim().toUpperCase())
     .join("|");
 }

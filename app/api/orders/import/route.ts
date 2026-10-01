@@ -16,12 +16,12 @@ async function publishMagicQuantity(listing: any) {
   // A Scryfall mapping is the durable indication that this is a Mana Pool
   // Magic listing. Do not rely on the mutable game classification because an
   // older import may already have marked an ended listing as "other".
-  if (!listing?.scryfall_id) return false;
+  if (!listing?.scryfall_id || !listing?.condition_id) return false;
   await setManaPoolInventory([{
     scryfall_id: String(listing.scryfall_id),
     language_id: listing.language_id || "EN",
     finish_id: listing.finish_id || "NF",
-    condition_id: listing.condition_id || "NM",
+    condition_id: listing.condition_id,
     quantity: Math.max(0, Number(listing.ebay_quantity || 0)),
     price_cents: Number(listing.ebay_quantity || 0) > 0 && listing.manapool_price_cents != null
       ? Number(listing.manapool_price_cents)
