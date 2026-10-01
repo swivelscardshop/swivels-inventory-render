@@ -497,7 +497,6 @@ function Dashboard({ s, go, notifications, reloadNotifications }: { s: Status; g
           </span>
         }
       />
-      <NotificationCenter data={notifications} reload={reloadNotifications} go={go}/>
       <div className="metrics">
         <Metric
           n={s.listings || 0}
@@ -563,6 +562,7 @@ function Dashboard({ s, go, notifications, reloadNotifications }: { s: Status; g
           <Empty text="No real open orders have been imported." />
         )}
       </section>
+      <NotificationCenter data={notifications} reload={reloadNotifications} go={go}/>
     </>
   );
 }
@@ -1527,6 +1527,16 @@ function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: {
     }catch(e){notify(e instanceof Error?e.message:"Retry failed");}
     finally{setRetrying(null);}
   };
+  const repairScheduledSkus=async()=>{
+    if(!(await confirmAction({title:"Restore SKUs from eBay?",message:"This will copy each active listing's existing eBay Custom Label into its missing Supabase location. Blank, sold, allocated, or conflicting SKUs will not be changed.",confirmLabel:"Restore safe SKUs"})))return;
+    setRetrying("repair-missing-primary-skus");
+    try{
+      const response=await fetch("/api/exceptions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"repair-missing-primary-skus"})});
+      const body:any=await response.json();if(!response.ok)throw new Error(body.error||"SKU repair failed");
+      notify(body.message||"Scheduled listing SKUs repaired.");await reload();
+    }catch(e){notify(e instanceof Error?e.message:"SKU repair failed");}
+    finally{setRetrying(null);}
+  };
   const manageInventoryException=async(action:"end-listing"|"match-quantity"|"dismiss-exception",item:any)=>{
     const options=action==="end-listing"
       ?{title:"End this eBay listing?",message:`This will end eBay listing #${item.ebayListingId}. Its Supabase SKU records will be retained, but the listing will become inactive.`,confirmLabel:"End listing",tone:"danger" as const}
@@ -1574,7 +1584,7 @@ function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: {
         </article>)}</div>:<Empty text="No safe missing SKUs were found in recently ended listings."/>)}
       </section>
       <section className="panel">
-        <Title k="OPEN EXCEPTIONS" t={`${data?.items?.length||0} item${data?.items?.length===1?"":"s"} requiring review`}/>
+        <div className="title"><div><small>OPEN EXCEPTIONS</small><h3>{`${data?.items?.length||0} item${data?.items?.length===1?"":"s"} requiring review`}</h3></div>{!!data?.counts?.inventory&&<button className="primary" disabled={retrying!==null} onClick={repairScheduledSkus}>{retrying==="repair-missing-primary-skus"?<><RefreshCw className="spin"/>Restoring…</>:"Restore eBay SKUs"}</button>}</div>
         {loading&&!data?<Empty text="Checking synchronization and inventory status…"/>:data?.items?.length?
           <div className="exception-list">{data.items.map((item:any)=><article className={`exception-row ${item.severity}`} key={item.id}>
             <AlertTriangle/><div><span>{item.category}</span><b>{item.title}</b><p>{item.detail}</p>{item.occurredAt&&<small>{new Date(item.occurredAt).toLocaleString()}</small>}</div>

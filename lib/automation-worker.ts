@@ -2,6 +2,7 @@ import { db } from "@/lib/supabase";
 import { getEbayWebhookStatus, configureEbayWebhooks, getActiveListingCount } from "@/lib/ebay";
 import { count } from "@/lib/supabase";
 import { listManaPoolWebhooks, registerManaPoolWebhook } from "@/lib/manapool";
+import { repairMissingPrimarySkus } from "@/lib/sku-repair";
 
 type WorkerState = { started: boolean; queueBusy: boolean; recoveryBusy: boolean; verifyBusy: boolean; reconciliationBusy: boolean; catalogBusy: boolean };
 
@@ -126,6 +127,8 @@ async function catalogTick(state: WorkerState) {
         : `scheduled catalog verification: ${Number(synced.listings || ebayCount)} active`;
       await save({automation_last_full_catalog_at:checkedAt});
     }
+    const repaired = await repairMissingPrimarySkus();
+    if (repaired.repaired) result += `; restored ${repaired.repaired} scheduled-listing SKU(s)`;
     await save({ automation_last_catalog_at: checkedAt, automation_last_catalog_result: result });
   } catch (error) {
     await save({ automation_last_catalog_at: checkedAt, automation_last_catalog_result: `failed: ${error instanceof Error ? error.message : "Catalog check failed"}` }).catch(() => {});
