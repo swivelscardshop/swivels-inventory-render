@@ -26,7 +26,7 @@ export async function GET() {
   try {
     const [events, secrets, openIssues, pendingCount, failedCount, latestImport] = await Promise.all([
       db("sync_events?select=id,source,event_key,event_type,status,attempts,error_message,received_at,processed_at,payload&order=received_at.desc&limit=100"),
-      db("app_secrets?select=key,value,updated_at&key=in.(last_ebay_webhook_at,last_ebay_webhook_event,last_ebay_webhook_result,last_manapool_webhook_at,last_manapool_webhook_event,last_manapool_webhook_result,webhook_base_url,manapool_webhook_secret)&limit=20"),
+      db("app_secrets?select=key,value,updated_at&key=in.(last_ebay_webhook_at,last_ebay_webhook_event,last_ebay_webhook_result,last_manapool_webhook_at,last_manapool_webhook_event,last_manapool_webhook_result,webhook_base_url,manapool_webhook_secret,automation_worker_heartbeat,automation_worker_status,automation_worker_error,automation_last_recovery_at,automation_last_recovery_result,automation_webhook_verified_at,automation_ebay_webhook_live,automation_manapool_webhook_live,automation_webhook_error)&limit=30"),
       dbAll("reconciliation_issues?select=id&status=eq.open"),
       dbAll("sync_events?select=id&status=eq.pending"),
       dbAll("sync_events?select=id&status=eq.failed"),
@@ -35,6 +35,8 @@ export async function GET() {
     const saved = secretMap(secrets || []);
     const ebayResult = saved.last_ebay_webhook_result || null;
     const manaResult = saved.last_manapool_webhook_result || null;
+    const heartbeatAge = saved.automation_worker_heartbeat ? Date.now() - new Date(saved.automation_worker_heartbeat).getTime() : Infinity;
+    const workerOnline = heartbeatAge < 90_000;
     return NextResponse.json({
       ok: true,
       summary: {
@@ -42,11 +44,19 @@ export async function GET() {
         failed: failedCount.length,
         mismatches: openIssues.length,
         lastImportAt: latestImport?.[0]?.last_ebay_sync_at || null,
+        workerOnline,
+        workerHeartbeat: saved.automation_worker_heartbeat || null,
+        workerStatus: saved.automation_worker_status || "not started",
+        workerError: saved.automation_worker_error || null,
+        lastRecoveryAt: saved.automation_last_recovery_at || null,
+        lastRecoveryResult: saved.automation_last_recovery_result || null,
       },
       connections: {
-        ebay: { connected: Boolean(saved.webhook_base_url), lastAt: saved.last_ebay_webhook_at || null, event: saved.last_ebay_webhook_event || null, result: ebayResult, healthy: Boolean(saved.webhook_base_url) && !isFailure(ebayResult) },
-        manapool: { connected: Boolean(saved.webhook_base_url && saved.manapool_webhook_secret), lastAt: saved.last_manapool_webhook_at || null, event: saved.last_manapool_webhook_event || null, result: manaResult, healthy: Boolean(saved.webhook_base_url && saved.manapool_webhook_secret) && !isFailure(manaResult) },
+        ebay: { connected: saved.automation_ebay_webhook_live === "true", lastAt: saved.last_ebay_webhook_at || null, event: saved.last_ebay_webhook_event || null, result: ebayResult, healthy: saved.automation_ebay_webhook_live === "true" && !isFailure(ebayResult) },
+        manapool: { connected: saved.automation_manapool_webhook_live === "true", lastAt: saved.last_manapool_webhook_at || null, event: saved.last_manapool_webhook_event || null, result: manaResult, healthy: saved.automation_manapool_webhook_live === "true" && !isFailure(manaResult) },
         endpoint: saved.webhook_base_url || null,
+        verifiedAt: saved.automation_webhook_verified_at || null,
+        verificationError: saved.automation_webhook_error || null,
       },
       events,
     });
