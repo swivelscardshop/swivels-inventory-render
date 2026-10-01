@@ -104,6 +104,7 @@ export default function Home() {
     [message, setMessage] = useState(""),
     [confirmation, setConfirmation] = useState<ConfirmOptions | null>(null);
   const confirmationResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  const orderImportRunning = useRef(false);
   const confirmAction: ConfirmAction = useCallback((options) => {
     return new Promise((resolve) => {
       confirmationResolver.current = resolve;
@@ -184,21 +185,8 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [view, status.ready, q, page, loadInventory]);
   useEffect(() => {
-    if (view !== "orders" || !status.ready) return;
-    loadOrders();
-    const timer=window.setInterval(()=>{if(document.visibilityState==="visible")loadOrders();},15000);
-    return ()=>window.clearInterval(timer);
+    if (view === "orders" && status.ready) loadOrders();
   }, [view, status.ready, loadOrders]);
-  useEffect(()=>{
-    if(!status.ready)return;
-    const timer=window.setInterval(()=>{if(document.visibilityState==="visible")load().catch(()=>{});},15000);
-    return ()=>window.clearInterval(timer);
-  },[status.ready,load]);
-  useEffect(()=>{
-    if(view!=="inventory"||!status.ready)return;
-    const timer=window.setInterval(()=>{if(document.visibilityState==="visible")loadInventory(q,page);},30000);
-    return ()=>window.clearInterval(timer);
-  },[view,status.ready,q,page,loadInventory]);
   useEffect(() => {
     if (view !== "manapool" || !status.ready) return;
     setLoading(true);
@@ -247,6 +235,28 @@ export default function Home() {
     finally{setLoading(false);}
   },[]);
   useEffect(()=>{if(view==="aging"&&status.ready&&!aging)loadAging();},[view,status.ready,aging,loadAging]);
+  useEffect(() => {
+    if (!status.ready || !status.ebayConfigured) return;
+    let stopped = false;
+    const importOpenOrders = async () => {
+      if (document.visibilityState !== "visible" || orderImportRunning.current) return;
+      orderImportRunning.current = true;
+      try {
+        const response = await fetch("/api/orders/import", { method: "POST", cache: "no-store" });
+        const result: any = await response.json();
+        if (!response.ok || result?.ok === false) throw new Error(result?.error || "eBay order import failed");
+        if (!stopped) await load();
+      } catch (error) {
+        if (!stopped) setMessage(error instanceof Error ? error.message : "eBay order import failed");
+      } finally {
+        orderImportRunning.current = false;
+      }
+    };
+    // One recovery pass when the app opens. Live changes arrive through the
+    // hosted webhook; the browser does not poll eBay on a timer.
+    importOpenOrders();
+    return () => { stopped = true; };
+  }, [status.ready, status.ebayConfigured, load]);
   useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => setMessage(""), 6000);
@@ -1439,11 +1449,8 @@ function SyncControl({ data, reload, notify, go, confirmAction }: { data:any; re
           <b>{connection.value?.lastAt?`Last event: ${stamp(connection.value.lastAt)}`:connection.value?.connected?"Connected · waiting for the next marketplace event":"Webhook setup required"}</b>
           <small>{connection.value?.event||"No event received since Sync Control was installed"} · {connection.value?.result||"Connection remains ready"}</small>
         </article>)}
-        <article className={summary.workerOnline?"connection-ok":"connection-wait"}><div><span className="sync-dot"/><strong>Hosted automation</strong><em>{summary.workerOnline?"Running":"Offline"}</em></div><b>{summary.workerHeartbeat?`Heartbeat: ${stamp(summary.workerHeartbeat)}`:"No worker heartbeat recorded"}</b><small>{summary.lastRecoveryAt?`Last missed-order check: ${stamp(summary.lastRecoveryAt)} · ${summary.lastRecoveryResult||"completed"}`:summary.workerError||"Waiting for Render worker startup"}</small></article>
       </div>
       {connections.endpoint&&<p className="sync-endpoint">Hosted receiver: {connections.endpoint}</p>}
-      {connections.verifiedAt&&<p className="sync-endpoint">Marketplace subscriptions verified: {stamp(connections.verifiedAt)}</p>}
-      {connections.verificationError&&<p className="sync-error">Verification error: {connections.verificationError}</p>}
     </section>
     <section className="panel">
       <div className="title"><div><small>RECOVERY TOOLS</small><h3>Verify and repair synchronization</h3></div><div className="toolbar sync-actions">

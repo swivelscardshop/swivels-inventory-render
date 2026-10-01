@@ -2,8 +2,7 @@ services:
   - type: web
     name: swivels-inventory
     runtime: docker
-    # An always-on instance is required for webhook handling and the recovery worker.
-    plan: starter
+    plan: free
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/health
@@ -32,4 +31,4 @@ services:
       - key: APP_BASE_URL
         sync: false
       - key: MANAPOOL_SYNC_ENABLED
-        value: "true"
+        value: "false"

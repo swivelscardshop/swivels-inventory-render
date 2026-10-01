@@ -439,40 +439,6 @@ export async function getOpenOrders(token: string) {
   });
 }
 
-export async function getRecentOrders(token: string, hours = 72) {
-  const end = new Date();
-  const start = new Date(end.getTime() - Math.max(1, Math.min(720, hours)) * 60 * 60 * 1000);
-  const rows: any[] = [];
-  let offset = 0;
-  for (let page = 0; page < 10; page += 1) {
-    const filter = encodeURIComponent(`creationdate:[${start.toISOString()}..${end.toISOString()}]`);
-    const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order?limit=200&offset=${offset}&filter=${filter}`, {
-      cache: "no-store",
-      headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
-    });
-    const body: any = await response.json();
-    if (!response.ok) throw new Error(`eBay recent orders request failed: ${body.errors?.[0]?.message || response.status}`);
-    const batch = body.orders || [];
-    rows.push(...batch);
-    offset += batch.length;
-    if (!body.next || !batch.length) break;
-  }
-  return rows.filter((order: any) => !["CANCELED", "CANCELLED"].includes(String(order.cancelStatus?.cancelState || "").toUpperCase()));
-}
-
-export async function getLiveListingQuantity(itemId: string) {
-  if (!/^\d+$/.test(itemId)) throw new Error("Invalid eBay listing ID");
-  try {
-    const root: any = await tradingCall("GetItem", `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${xmlEscape(itemId)}</ItemID><DetailLevel>ReturnAll</DetailLevel></GetItemRequest>`);
-    const item = root?.Item;
-    return Math.max(0, Number(item?.Quantity || 0) - Number(item?.SellingStatus?.QuantitySold || 0));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (/ended|not found|invalid item/i.test(message)) return 0;
-    throw error;
-  }
-}
-
 export async function getOrder(token: string, orderId: string) {
   if (!orderId || orderId.length > 100) throw new Error("Invalid eBay order ID");
   const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order/${encodeURIComponent(orderId)}`, {

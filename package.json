@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.11.5-hosted-automation.1",
+  "version": "1.11.5-aging-report.1",
   "private": true,
   "engines": {
     "node": "22.x"
