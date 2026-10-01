@@ -30,7 +30,7 @@ export async function POST() {
     // Keep inactive mapped rows classified as Magic so delayed order retries
     // can still publish their final quantity to Mana Pool.
     for (const group of chunks(listings)) {
-      const databaseRows = group.map(({ started_at: _startedAt, ...listing }) => listing);
+      const databaseRows = group.map(({ started_at, ...listing }) => ({...listing,ebay_started_at:started_at}));
       await db("marketplace_listings?on_conflict=ebay_listing_id", {
         method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(databaseRows),
       });

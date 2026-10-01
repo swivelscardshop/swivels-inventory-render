@@ -29,6 +29,7 @@ type View =
   | "intake"
   | "manapool"
   | "sync-control"
+  | "aging"
   | "exceptions"
   | "settings";
   
@@ -73,6 +74,7 @@ const nav = [
   ["intake", "CSV Intake", FileUp],
   ["manapool", "Mana Pool", Waves],
   ["sync-control", "Sync Control", RefreshCw],
+  ["aging", "Aging Report", PackageCheck],
   ["exceptions", "Exception Center", ShieldAlert],
   ["settings", "Settings", Settings],
 ] as const;
@@ -93,6 +95,7 @@ export default function Home() {
     [intake, setIntake] = useState<any>(null),
     [manaPool, setManaPool] = useState<any>(null),
     [syncControl, setSyncControl] = useState<any>(null),
+    [aging, setAging] = useState<any>(null),
     [exceptions, setExceptions] = useState<any>(null),
     [q, setQ] = useState(""),
     [page, setPage] = useState(1),
@@ -221,6 +224,17 @@ export default function Home() {
     const timer = window.setInterval(loadSyncControl, 15000);
     return () => window.clearInterval(timer);
   }, [view, status.ready, loadSyncControl]);
+  const loadAging = useCallback(async (bucket="180",game="all",reviewed="open",currentPage=1) => {
+    setLoading(true);
+    try {
+      const response=await fetch(`/api/aging?bucket=${bucket}&game=${game}&reviewed=${reviewed}&page=${currentPage}`,{cache:"no-store"});
+      const body:any=await response.json();
+      if(!response.ok)throw new Error(body.error||"Aging Report failed");
+      setAging(body);
+    } catch(e){setMessage(e instanceof Error?e.message:"Aging Report failed");}
+    finally{setLoading(false);}
+  },[]);
+  useEffect(()=>{if(view==="aging"&&status.ready&&!aging)loadAging();},[view,status.ready,aging,loadAging]);
   useEffect(() => {
     if (!status.ready || !status.ebayConfigured) return;
     let stopped = false;
@@ -402,6 +416,7 @@ export default function Home() {
           )}{" "}
           {view === "manapool" && <ManaPoolPanel data={manaPool} loading={loading} notify={setMessage} confirmAction={confirmAction} />}{" "}
           {view === "sync-control" && <SyncControl data={syncControl} reload={loadSyncControl} notify={setMessage} go={setView} confirmAction={confirmAction} />}{" "}
+          {view === "aging" && <AgingReport data={aging} setData={setAging} loading={loading} load={loadAging} notify={setMessage} />}{" "}
           {view === "exceptions" && <ExceptionCenter data={exceptions} loading={loading} reload={loadExceptions} notify={setMessage} go={setView} confirmAction={confirmAction} />}{" "}
           {view === "settings" && <Connections s={status} />}
         </div>
@@ -1358,6 +1373,47 @@ function CsvIntake({
     </div>
   );
 }
+function AgingReport({data,setData,loading,load,notify}:{data:any;setData:(v:any)=>void;loading:boolean;load:(bucket?:string,game?:string,reviewed?:string,page?:number)=>Promise<void>;notify:(v:string)=>void}){
+  const [working,setWorking]=useState<string|null>(null);
+  const bucket=data?.bucket||"180",game=data?.game||"all",reviewed=data?.reviewed||"open",page=data?.page||1;
+  const refresh=(changes:any={})=>load(changes.bucket||bucket,changes.game||game,changes.reviewed||reviewed,changes.page||1);
+  const action=async(actionName:string,listingId?:string)=>{
+    setWorking(listingId||actionName);
+    try{
+      const response=await fetch("/api/aging",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:actionName,listingId})});
+      const body:any=await response.json();if(!response.ok)throw new Error(body.error||"Aging action failed");
+      notify(body.message||"Aging Report updated.");await refresh({page});
+    }catch(e){notify(e instanceof Error?e.message:"Aging action failed");}
+    finally{setWorking(null);}
+  };
+  const counts=data?.counts||{};
+  return <div className="stack">
+    <Intro title="Aging Report" text="Review older eBay listings using age and the latest 30 days of buyer traffic. No listing is changed automatically." action={<button className="primary" disabled={working!==null} onClick={()=>action("refresh-traffic")}><RefreshCw className={working==="refresh-traffic"?"spin":""}/>{working==="refresh-traffic"?"Updating…":"Update traffic"}</button>}/>
+    <div className="metrics aging-metrics">
+      <Metric n={counts.age90||0} t="90–179 days" d="Beginning to age"/><Metric n={counts.age180||0} t="180–364 days" d="Review recommended"/><Metric n={counts.age365||0} t="365+ days" d="Priority review"/><Metric n={data?.total||0} t="Current queue" d="Matches selected filters"/>
+    </div>
+    <section className="panel">
+      <div className="toolbar aging-toolbar">
+        <select value={bucket} onChange={event=>refresh({bucket:event.target.value})}><option value="90">90–179 days</option><option value="180">180–364 days</option><option value="365">365+ days</option></select>
+        <select value={game} onChange={event=>refresh({game:event.target.value})}><option value="all">All games</option><option value="pokemon">Pokémon</option><option value="magic">Magic</option></select>
+        <select value={reviewed} onChange={event=>refresh({reviewed:event.target.value})}><option value="open">Needs review</option><option value="reviewed">Reviewed</option><option value="all">All listings</option></select>
+        <button className="secondary" disabled={loading} onClick={()=>refresh({page})}><RefreshCw className={loading?"spin":""}/>Refresh</button>
+      </div>
+      {loading&&!data?<Empty text="Loading aged listings…"/>:data?.rows?.length?<div className="aging-list">{data.rows.map((row:any)=><article key={row.id}>
+        <div className="aging-title"><span>{row.game}</span><b>{row.title}</b><small>eBay #{row.ebay_listing_id} · {row.ebay_sku||"No SKU"}</small></div>
+        <div className="aging-stat"><small>AGE</small><b>{row.ageDays?.toLocaleString()||"—"} days</b></div>
+        <div className="aging-stat"><small>PRICE / QTY</small><b>${Number(row.price||0).toFixed(2)} · {row.ebay_quantity}</b></div>
+        <div className="aging-stat"><small>30-DAY TRAFFIC</small><b>{row.traffic_impressions==null?"Not collected":`${Number(row.traffic_impressions).toLocaleString()} imp · ${Number(row.traffic_views||0).toLocaleString()} views`}</b><em>{row.traffic_transactions!=null?`${row.traffic_transactions} sale${Number(row.traffic_transactions)===1?"":"s"}`:""}</em></div>
+        <div className={`aging-recommendation ${row.recommendation?.key||"collect"}`}><small>RECOMMENDATION</small><b>{row.recommendation?.label||"Review listing"}</b></div>
+        <div className="aging-actions"><a className="secondary" href={`https://www.ebay.com/itm/${row.ebay_listing_id}`} target="_blank" rel="noreferrer">Open eBay</a><button className="primary" disabled={working!==null} onClick={()=>action(row.aging_reviewed_at?"unreview":"review",row.id)}>{working===row.id?"Saving…":row.aging_reviewed_at?"Return to queue":"Mark reviewed"}</button></div>
+      </article>)}</div>:<Empty text="No active listings match these aging filters."/>}
+      {!!data?.total&&<div className="pager"><button className="secondary" disabled={page<=1||loading} onClick={()=>refresh({page:page-1})}>Previous</button><span>Page {page} of {Math.max(1,Math.ceil(data.total/data.pageSize))}</span><button className="secondary" disabled={page*data.pageSize>=data.total||loading} onClick={()=>refresh({page:page+1})}>Next</button></div>}
+    </section>
+    <section className="notice aging-safety"><b>Safe review mode</b><span>The report recommends changes but does not end, relist, promote, or reprice anything. Traffic refresh processes up to 200 older listings per run.</span></section>
+    <section className="panel aging-setup"><Title k="FIRST-TIME SETUP" t="Enable listing dates and traffic"/><p className="bodycopy">Run <b>supabase/v1.11.5-aging-report.sql</b> in Supabase, reconnect eBay once to approve read-only Analytics access, then use Refresh from eBay before updating traffic.</p><div className="toolbar"><a className="secondary" href="/api/ebay/connect">Reconnect eBay for Analytics</a></div></section>
+  </div>;
+}
+
 function SyncControl({ data, reload, notify, go, confirmAction }: { data:any; reload:()=>Promise<void>; notify:(v:string)=>void; go:(v:View)=>void; confirmAction:ConfirmAction }) {
   const [working,setWorking]=useState<string|null>(null);
   const act=async(action:string,eventId?:string)=>{

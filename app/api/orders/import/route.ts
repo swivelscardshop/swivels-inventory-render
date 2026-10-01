@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { accessToken, getOpenOrders } from "@/lib/ebay";
+import { accessToken, getLiveListingQuantity, getRecentOrders } from "@/lib/ebay";
 import { db } from "@/lib/supabase";
 import { setManaPoolInventory } from "@/lib/manapool";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const chunks = <T,>(rows: T[], size = 100) => {
   const result: T[][] = [];
@@ -41,10 +41,14 @@ async function publishMagicQuantity(listing: any) {
 export async function POST() {
   try {
     const token = await accessToken();
-    const orders = await getOpenOrders(token);
+    // Include recently fulfilled orders. If a webhook was missed and the seller
+    // ships directly on eBay, an open-only recovery query can no longer see the
+    // sale and Supabase would retain the sold physical cards forever.
+    const orders = await getRecentOrders(token, 72);
     const openLines = (order: any) => (order.lineItems || []).filter((line: any) => {
       const lineStatus = String(line.lineItemFulfillmentStatus || "").toUpperCase();
-      return String(order.orderFulfillmentStatus || "").toUpperCase() === "NOT_STARTED" || !lineStatus || lineStatus === "NOT_STARTED";
+      const orderStatus=String(order.orderFulfillmentStatus || "").toUpperCase();
+      return ["NOT_STARTED","IN_PROGRESS","FULFILLED"].includes(orderStatus) || !lineStatus || ["NOT_STARTED","IN_PROGRESS","FULFILLED"].includes(lineStatus);
     });
 
     const itemIds = [...new Set(orders.flatMap((order: any) => openLines(order).map((line: any) => String(line.legacyItemId || ""))).filter(Boolean))];
@@ -109,8 +113,11 @@ export async function POST() {
         }
 
         const orderId = String(order.orderId);
-        const existing = await db(`marketplace_orders?select=id&marketplace=eq.ebay&marketplace_order_id=eq.${encodeURIComponent(orderId)}&listing_id=eq.${listing.id}&limit=1`);
+        const existing = await db(`marketplace_orders?select=id,fulfillment_status&marketplace=eq.ebay&marketplace_order_id=eq.${encodeURIComponent(orderId)}&listing_id=eq.${listing.id}&limit=1`);
         const soldQuantity = Math.max(1, Number(line.quantity || 1));
+        const orderFulfillment=String(order.orderFulfillmentStatus||"").toUpperCase();
+        const lineFulfillment=String(line.lineItemFulfillmentStatus||"").toUpperCase();
+        const alreadyShipped=orderFulfillment==="FULFILLED"||lineFulfillment==="FULFILLED";
         const locations = await db(`physical_skus?select=id,sku,location_label,created_at&listing_id=eq.${listing.id}&status=eq.available&order=created_at.asc&limit=500`);
         const pulled = [...(locations || [])]
           .sort((a: any, b: any) => Number(b.sku === listing.ebay_sku) - Number(a.sku === listing.ebay_sku) || String(a.created_at).localeCompare(String(b.created_at)))
@@ -125,10 +132,20 @@ export async function POST() {
         };
 
         if (existing?.length) {
+          if(alreadyShipped&&String(existing[0].fulfillment_status)!=="fulfilled"){
+            await db(`physical_skus?source_order_id=eq.${encodeURIComponent(orderId)}&listing_id=eq.${listing.id}&status=eq.allocated`,{method:"DELETE"});
+            await db(`marketplace_orders?id=eq.${existing[0].id}`,{method:"PATCH",body:JSON.stringify({fulfillment_status:"fulfilled",sku_removed_at:new Date().toISOString(),raw_payload:rawPayload,order_title:listing.title})});
+          } else {
           await db(`marketplace_orders?id=eq.${existing[0].id}`, {
             method: "PATCH",
             body: JSON.stringify({ raw_payload: rawPayload, order_title: listing.title }),
           });
+          }
+          if(alreadyShipped){
+            const liveQuantity=await getLiveListingQuantity(itemId);
+            await db(`marketplace_listings?id=eq.${listing.id}`,{method:"PATCH",body:JSON.stringify({ebay_quantity:liveQuantity,ebay_status:liveQuantity>0?"active":"inactive",updated_at:new Date().toISOString()})});
+            listing.ebay_quantity=liveQuantity;
+          }
           // Retrying an already-imported order must not subtract inventory a
           // second time, but it should retry a previously failed Mana Pool
           // publish using the quantity already stored in Supabase.
@@ -145,23 +162,26 @@ export async function POST() {
             marketplace_order_id: orderId,
             listing_id: listing.id,
             quantity: soldQuantity,
-            fulfillment_status: "unfulfilled",
+            fulfillment_status: alreadyShipped ? "fulfilled" : "unfulfilled",
             refunded: false,
             ordered_at: order.creationDate || new Date().toISOString(),
             order_title: listing.title,
             pull_sku: pulled.length ? pulled.map((row: any) => row.sku).join(", ") : line.sku || listing.ebay_sku || null,
             pull_location: pulled.length ? pulled.map((row: any) => row.location_label).join(", ") : line.sku || listing.ebay_sku || null,
-            sku_removed_at: null,
+            sku_removed_at: alreadyShipped ? new Date().toISOString() : null,
             raw_payload: rawPayload,
           }),
         });
         for (const location of pulled) {
-          await db(`physical_skus?id=eq.${location.id}`, {
+          if(alreadyShipped) await db(`physical_skus?id=eq.${location.id}`,{method:"DELETE"});
+          else await db(`physical_skus?id=eq.${location.id}`, {
             method: "PATCH",
             body: JSON.stringify({ status: "allocated", source_order_id: orderId, updated_at: new Date().toISOString() }),
           });
         }
-        const remaining=Math.max(0,Number(listing.ebay_quantity||0)-soldQuantity);
+        // Read the authoritative current quantity from eBay. This avoids
+        // double-subtracting if a full catalog refresh already saw the sale.
+        const remaining=await getLiveListingQuantity(itemId);
         await db(`marketplace_listings?id=eq.${listing.id}`, {
           method:"PATCH",
           body:JSON.stringify({ebay_quantity:remaining,ebay_status:remaining>0?"active":"inactive",updated_at:new Date().toISOString()}),

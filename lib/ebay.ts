@@ -42,6 +42,7 @@ export async function accessToken() {
 const oauthScopes = [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
 ];
 
 export function ebayAuthorizationUrl(state: string) {
@@ -249,6 +250,43 @@ export async function getActiveListings(token: string) {
   return results;
 }
 
+export async function getListingTraffic(token: string, listingIds: string[]) {
+  if (!listingIds.length) return new Map<string, any>();
+  const end = new Date();
+  const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const date = (value: Date) => value.toISOString().slice(0, 10);
+  const filter = `listing_ids:{${listingIds.join("|")}},date_range:[${date(start)}..${date(end)}]`;
+  const query = new URLSearchParams({
+    dimension: "LISTING",
+    filter,
+    metric: "TOTAL_IMPRESSION_TOTAL,LISTING_VIEWS_TOTAL,TRANSACTION,CLICK_THROUGH_RATE,SALES_CONVERSION_RATE",
+  });
+  const response = await fetch(`https://api.ebay.com/sell/analytics/v1/traffic_report?${query}`, {
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
+  });
+  const body: any = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = body.errors?.[0]?.longMessage || body.errors?.[0]?.message || response.status;
+    if (response.status === 403) throw new Error("Reconnect eBay once to grant the Analytics permission, then refresh traffic again.");
+    throw new Error(`eBay traffic report failed: ${detail}`);
+  }
+  const metricKeys = (body.header?.metrics || []).map((metric: any) => String(metric.key));
+  const result = new Map<string, any>();
+  for (const record of body.records || []) {
+    const id = String(record.dimensionValues?.[0]?.value || "");
+    const values = Object.fromEntries(metricKeys.map((key: string, index: number) => [key, Number(record.metricValues?.[index]?.value || 0)]));
+    if (id) result.set(id, {
+      impressions: values.TOTAL_IMPRESSION_TOTAL || 0,
+      views: values.LISTING_VIEWS_TOTAL || 0,
+      transactions: values.TRANSACTION || 0,
+      ctr: values.CLICK_THROUGH_RATE || 0,
+      conversion: values.SALES_CONVERSION_RATE || 0,
+    });
+  }
+  return result;
+}
+
 const xmlEscape = (value: string | number) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 
 async function tradingCall(callName: string, xml: string) {
@@ -399,6 +437,40 @@ export async function getOpenOrders(token: string) {
     const canceled = String(order.cancelStatus?.cancelState || "").toUpperCase();
     return ["NOT_STARTED", "IN_PROGRESS"].includes(status) && !["CANCELED", "CANCELLED"].includes(canceled);
   });
+}
+
+export async function getRecentOrders(token: string, hours = 72) {
+  const end = new Date();
+  const start = new Date(end.getTime() - Math.max(1, Math.min(720, hours)) * 60 * 60 * 1000);
+  const rows: any[] = [];
+  let offset = 0;
+  for (let page = 0; page < 10; page += 1) {
+    const filter = encodeURIComponent(`creationdate:[${start.toISOString()}..${end.toISOString()}]`);
+    const response = await fetch(`https://api.ebay.com/sell/fulfillment/v1/order?limit=200&offset=${offset}&filter=${filter}`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": process.env.EBAY_MARKETPLACE_ID || "EBAY_US" },
+    });
+    const body: any = await response.json();
+    if (!response.ok) throw new Error(`eBay recent orders request failed: ${body.errors?.[0]?.message || response.status}`);
+    const batch = body.orders || [];
+    rows.push(...batch);
+    offset += batch.length;
+    if (!body.next || !batch.length) break;
+  }
+  return rows.filter((order: any) => !["CANCELED", "CANCELLED"].includes(String(order.cancelStatus?.cancelState || "").toUpperCase()));
+}
+
+export async function getLiveListingQuantity(itemId: string) {
+  if (!/^\d+$/.test(itemId)) throw new Error("Invalid eBay listing ID");
+  try {
+    const root: any = await tradingCall("GetItem", `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${xmlEscape(itemId)}</ItemID><DetailLevel>ReturnAll</DetailLevel></GetItemRequest>`);
+    const item = root?.Item;
+    return Math.max(0, Number(item?.Quantity || 0) - Number(item?.SellingStatus?.QuantitySold || 0));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/ended|not found|invalid item/i.test(message)) return 0;
+    throw error;
+  }
 }
 
 export async function getOrder(token: string, orderId: string) {

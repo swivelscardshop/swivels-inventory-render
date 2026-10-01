@@ -39,3 +39,18 @@ Supabase project are connected.
 
 - Fixed Sync Control incorrectly presenting a configured eBay webhook as waiting/not connected before its first new event.
 - Connection status and latest-event activity are now displayed as separate signals.
+## 1.11.5-aging-report.1
+
+- Added a safe, review-only Aging Report with 90–179, 180–364, and 365+ day queues.
+- Added Pokémon/Magic and reviewed/open filters, pagination, eBay links, and review tracking.
+- Added listing-level 30-day eBay Analytics traffic collection in rotating batches of 200.
+- Added recommendations based on impressions, views, transactions, and listing age.
+- Added the `sell.analytics.readonly` OAuth scope; reconnect eBay once after deployment.
+- Run `supabase/v1.11.5-aging-report.sql`, then import from eBay once to populate original listing dates.
+## 1.11.5-shipped-order-recovery.1
+
+- Fixed missed eBay orders becoming invisible after they were shipped directly on eBay.
+- Recovery now reads all non-cancelled eBay orders created within the last 72 hours, including fulfilled orders.
+- Newly recovered fulfilled orders remove their sold physical SKUs and are stored as fulfilled without reappearing in the pull queue.
+- Listing quantity is read directly from eBay during recovery, preventing double deductions after a catalog refresh.
+- Existing app orders that were later shipped on eBay are completed and their allocated SKUs are removed automatically.
