@@ -16,6 +16,39 @@ export type ScryfallCandidate = {
 
 const clean = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
 
+type SetIdentity = { name: string; normalized: string; words: string[] };
+let setCatalogCache: { expires: number; rows: SetIdentity[] } | null = null;
+
+async function scryfallSetCatalog(get: (url: string) => Promise<any>): Promise<SetIdentity[]> {
+  if (setCatalogCache && setCatalogCache.expires > Date.now()) return setCatalogCache.rows;
+  const body = await get("https://api.scryfall.com/sets");
+  const rows: SetIdentity[] = (body?.data || []).flatMap((set: any) => {
+    const name = String(set.name || "").trim();
+    const normalized = clean(name);
+    if (!name || !normalized) return [];
+    return [{ name, normalized, words: normalized.split(" ") }];
+  }).sort((a: SetIdentity, b: SetIdentity) => b.words.length - a.words.length);
+  setCatalogCache = { expires: Date.now() + 24 * 60 * 60_000, rows };
+  return rows;
+}
+
+async function inferNameAndSetWithoutNumber(rawName: string, get: (url: string) => Promise<any>) {
+  const normalized = clean(rawName);
+  const words = normalized.split(" ").filter(Boolean);
+  const sets = await scryfallSetCatalog(get);
+  const aliases = (set: SetIdentity) => {
+    const values = [set.words];
+    if (set.normalized === "the list") values.push(["the", "list", "reprints"]);
+    return values;
+  };
+  for (const set of sets) for (const suffix of aliases(set)) {
+    if (words.length <= suffix.length) continue;
+    if (!suffix.every((word, index) => words[words.length - suffix.length + index] === word)) continue;
+    return { name: words.slice(0, -suffix.length).join(" "), setName: set.name };
+  }
+  return null;
+}
+
 function setNamesMatch(left: string, right: string, token = false) {
   const a = clean(left);
   const b = clean(right);
@@ -92,16 +125,8 @@ export function titleIdentity(row: ListingIdentity) {
 }
 
 export async function findScryfallCandidates(row: ListingIdentity): Promise<ScryfallCandidate[]> {
-  const { name, number, setName } = titleIdentity(row);
+  let { name, number, setName } = titleIdentity(row);
   if (!name || name.length < 2) return [];
-  const isRingHelper=/^the ring helper card$/i.test(name.trim());
-  const queryNumber = isRingHelper?`h${collectorKey(number)}`:collectorKey(number);
-  const isToken=/\btoken\b/i.test(String(row.title||"")) || /\btokens?\b/i.test(setName);
-  // Mana Pool/eBay commonly call this "Orc Army Token"; Scryfall's card name
-  // is "Orc Army" and token collector numbers can be stored as T0005/T005.
-  const lookupName=(isRingHelper?"The Ring // The Ring Tempts You":isToken?name.replace(/\btoken\b/ig," ").replace(/\s+/g," "):name).trim();
-  const tokenNumber4=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(4,"0")}`:"";
-  const tokenNumber3=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(3,"0")}`:"";
   const headers = { "User-Agent": "SwivelsInventory/1.10.14", Accept: "application/json" };
   const get = async (url: string): Promise<any> => {
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -121,6 +146,24 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     }
     throw new Error("Scryfall lookup temporarily unavailable after retries");
   };
+  // Titles without collector numbers still follow "Card Name | Set Name".
+  // Resolve the longest official Scryfall set-name suffix first. This keeps a
+  // card such as "Afterlife Mirage" from being fuzzily mapped to a printing
+  // in an unrelated set. If no set suffix can be proven, leave it for review.
+  if (!number && !setName) {
+    const inferred = await inferNameAndSetWithoutNumber(name, get);
+    if (!inferred) return [];
+    name = inferred.name;
+    setName = inferred.setName;
+  }
+  const isRingHelper=/^the ring helper card$/i.test(name.trim());
+  const queryNumber = isRingHelper?`h${collectorKey(number)}`:collectorKey(number);
+  const isToken=/\btoken\b/i.test(String(row.title||"")) || /\btokens?\b/i.test(setName);
+  // Mana Pool/eBay commonly call this "Orc Army Token"; Scryfall's card name
+  // is "Orc Army" and token collector numbers can be stored as T0005/T005.
+  const lookupName=(isRingHelper?"The Ring // The Ring Tempts You":isToken?name.replace(/\btoken\b/ig," ").replace(/\s+/g," "):name).trim();
+  const tokenNumber4=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(4,"0")}`:"";
+  const tokenNumber3=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(3,"0")}`:"";
   const searches=[
     [lookupName,tokenNumber4||queryNumber],
     [lookupName,tokenNumber3||queryNumber],
@@ -160,6 +203,9 @@ export async function findScryfallCandidates(row: ListingIdentity): Promise<Scry
     collector_number: String(card.collector_number),
     image_url: card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal || null,
   })) as ScryfallCandidate[];
+  if(setHint && !number){
+    cards=cards.filter(card=>setNamesMatch(card.set_name,setName,isToken)||setNamesMatch(String(card.set_name).split(":")[0],setName,isToken));
+  }
   // Token names and collector numbers are reused by many products. When the
   // title supplies a set, keep only that set family instead of presenting
   // unrelated Spirit/Army token printings for manual review.
@@ -187,7 +233,7 @@ export function chooseScryfallCandidate(row: ListingIdentity, candidates: Scryfa
     const setName = normalize(candidate.set_name);
     const setAlias = normalize(String(candidate.set_name).split(":")[0]);
     const parsedSet = normalize(parsed.setName);
-    const numberInTitle = collectorKey(candidate.collector_number) === collectorKey(parsed.number);
+    const numberInTitle = !parsed.number || collectorKey(candidate.collector_number) === collectorKey(parsed.number);
     const setInTitle = (setName && normalizedTitle.includes(setName)) || (setAlias.length >= 4 && normalizedTitle.includes(setAlias)) ||
       (parsedSet.length >= 2 && (setNamesMatch(setName,parsedSet,parsedIsToken) || setNamesMatch(setAlias,parsedSet,parsedIsToken)));
     return Boolean(setInTitle && numberInTitle);
