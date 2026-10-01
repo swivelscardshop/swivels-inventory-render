@@ -54,11 +54,17 @@ export async function POST() {
       try {
         const candidates = await findScryfallCandidates(row);
         const chosen = chooseScryfallCandidate(row, candidates);
+        const candidateSets=[...new Set(candidates.map((candidate:any)=>String(candidate.set_name||"").trim()).filter(Boolean))];
+        const candidateNames=[...new Set(candidates.map((candidate:any)=>String(candidate.name||"").trim()).filter(Boolean))];
+        const inferredIdentity={
+          ...(candidateSets.length===1&&!row.set_name?{set_name:candidateSets[0]}:{}),
+          ...(candidateNames.length===1?{card_name:candidateNames[0]}:{}),
+        };
         if (chosen) {
-          await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({scryfall_id:chosen.id,manapool_mapping_status:"mapped",manapool_mapping_candidates:candidates,...manaPoolVariant(row)}) });
+          await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({scryfall_id:chosen.id,manapool_mapping_status:"mapped",manapool_mapping_candidates:candidates,...inferredIdentity,...manaPoolVariant(row)}) });
           automaticallyMapped++;
         } else {
-          await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({manapool_mapping_status:candidates.length?"review":"unmatched",manapool_mapping_candidates:candidates}) });
+          await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({manapool_mapping_status:candidates.length?"review":"unmatched",manapool_mapping_candidates:candidates,...inferredIdentity}) });
           mappingReview++;
         }
       } catch { mappingReview++; }

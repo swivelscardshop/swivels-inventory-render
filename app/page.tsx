@@ -932,7 +932,9 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
     try {
       const r=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"retry-unresolved"})});
       const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Could not reset unresolved cards");
-      setPanelData(b.overview); setMapResult(null); notify("Unresolved cards are queued for a fresh mapping check.");
+      const checked=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"map"})});
+      const result:any=await checked.json();if(!checked.ok)throw new Error(result.error||"Fresh mapping check failed");
+      setPanelData(result.overview);setMapResult(result);notify(`Rechecked ${result.processed} cards: ${result.matched} mapped, ${result.review} need artwork review, ${result.unmatched} remain unmatched.`);
     } catch(e){notify(e instanceof Error?e.message:"Could not reset unresolved cards");} finally{setWorking(false);}
   };
   const reviewConflict = async (listing:any) => {

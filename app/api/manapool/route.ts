@@ -32,13 +32,18 @@ async function overview() {
     .map((x:any) => {
       const parsed = titleIdentity(x);
       const candidates = Array.isArray(x.manapool_mapping_candidates) ? x.manapool_mapping_candidates : [];
+      const candidateSets = [...new Set(candidates.map((candidate:any)=>String(candidate.set_name||"").trim()).filter(Boolean))];
+      const candidateNames = [...new Set(candidates.map((candidate:any)=>String(candidate.name||"").trim()).filter(Boolean))];
+      const resolvedSet = String(x.set_name || parsed.setName || (candidateSets.length===1?candidateSets[0]:"")).trim();
+      const resolvedName = String(x.card_name || (candidateNames.length===1?candidateNames[0]:parsed.name) || "").trim();
       let reason = "No Scryfall printing matched the parsed card name and collector number.";
-      if (!parsed.name) reason = "Card name could not be parsed from the eBay title.";
+      if (!resolvedName) reason = "Card name could not be parsed from the eBay title.";
+      else if (!parsed.number && candidates.length>1 && resolvedSet) reason = `${candidates.length} ${resolvedSet} art variants were found; choose the exact artwork.`;
       else if (!parsed.number) reason = "Collector number could not be parsed from the eBay title.";
       else if (x.manapool_mapping_status === "review" && candidates.length) reason = `${candidates.length} possible printings were found; manual selection is required.`;
       return {
         id:x.id, ebay_listing_id:x.ebay_listing_id, title:x.title, status:x.manapool_mapping_status,
-        parsed_name:parsed.name || "", parsed_number:parsed.number || "", parsed_set:parsed.setName || "",
+        parsed_name:resolvedName, parsed_number:parsed.number || "", parsed_set:resolvedSet,
         parsed_finish:parsed.finish || "Non-Foil", reason,
       };
     });
@@ -77,12 +82,18 @@ export async function POST(request: Request) {
         try {
           const candidates = await findScryfallCandidates(row);
           const chosen = chooseScryfallCandidate(row, candidates);
+          const candidateSets=[...new Set(candidates.map((candidate:any)=>String(candidate.set_name||"").trim()).filter(Boolean))];
+          const candidateNames=[...new Set(candidates.map((candidate:any)=>String(candidate.name||"").trim()).filter(Boolean))];
+          const inferredIdentity={
+            ...(candidateSets.length===1&&!row.set_name?{set_name:candidateSets[0]}:{}),
+            ...(candidateNames.length===1?{card_name:candidateNames[0]}:{}),
+          };
           if (chosen) {
-            await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:chosen.id, manapool_mapping_status:"mapped", manapool_mapping_candidates:candidates, ...manaPoolVariant(row) }) });
+            await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ scryfall_id:chosen.id, manapool_mapping_status:"mapped", manapool_mapping_candidates:candidates, ...inferredIdentity, ...manaPoolVariant(row) }) });
             matched++;
           } else {
             const status = candidates.length ? "review" : "unmatched";
-            await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ manapool_mapping_status:status, manapool_mapping_candidates:candidates }) });
+            await db(`marketplace_listings?id=eq.${row.id}`, { method:"PATCH", body:JSON.stringify({ manapool_mapping_status:status, manapool_mapping_candidates:candidates, ...inferredIdentity }) });
             candidates.length ? review++ : unmatched++;
           }
         } catch {
