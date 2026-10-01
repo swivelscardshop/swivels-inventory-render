@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.11.5-thermal-print-dark.1",
+  "version": "1.11.5-ebay-style-packing-slip.1",
   "private": true,
   "engines": {
     "node": "22.x"
