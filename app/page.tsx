@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Boxes,
   Check,
+  ClipboardCheck,
   Copy,
   Download,
   FileUp,
@@ -24,6 +25,7 @@ import {
 type View =
   | "dashboard"
   | "inventory"
+  | "bin-audit"
   | "orders"
   | "duplicates"
   | "intake"
@@ -69,6 +71,7 @@ type ConfirmAction = (options: ConfirmOptions) => Promise<boolean>;
 const nav = [
   ["dashboard", "Dashboard", LayoutDashboard],
   ["inventory", "Inventory", Boxes],
+  ["bin-audit", "Bin Reconciliation", ClipboardCheck],
   ["orders", "Orders", ShoppingBag],
   ["duplicates", "Duplicate Center", Copy],
   ["intake", "CSV Intake", FileUp],
@@ -88,6 +91,7 @@ export default function Home() {
       supabaseConfigured: false,
     }),
     [inventory, setInventory] = useState<Listing[]>([]),
+    [binAudit, setBinAudit] = useState<any>(null),
     [orders, setOrders] = useState<any[]>([]),
     [duplicateGroups, setDuplicateGroups] = useState<any[]>([]),
     [duplicateScanned, setDuplicateScanned] = useState(false),
@@ -183,6 +187,10 @@ export default function Home() {
     const timer = setTimeout(() => loadInventory(q, page), q ? 350 : 0);
     return () => clearTimeout(timer);
   }, [view, status.ready, q, page, loadInventory]);
+  useEffect(()=>{
+    if(view!=="bin-audit"||!status.ready||binAudit)return;
+    setLoading(true);fetch("/api/bin-audit",{cache:"no-store"}).then(async response=>{const body:any=await response.json();if(!response.ok)throw new Error(body.error||"Bin reconciliation failed");setBinAudit(body);}).catch(error=>setMessage(error instanceof Error?error.message:"Bin reconciliation failed")).finally(()=>setLoading(false));
+  },[view,status.ready,binAudit]);
   useEffect(() => {
     if (view !== "orders" || !status.ready) return;
     loadOrders();
@@ -385,6 +393,7 @@ export default function Home() {
               loading={loading}
             />
           )}{" "}
+          {view === "bin-audit" && <BinAudit data={binAudit} loading={loading} reload={()=>setBinAudit(null)} />} {" "}
           {view === "orders" && <Orders rows={orders} loading={loading} reload={loadOrders} notify={setMessage} confirmAction={confirmAction} />}{" "}
           {view === "duplicates" && (
             <Duplicates
@@ -722,6 +731,30 @@ function Inventory({
       </div>
     </div>
   );
+}
+function BinAudit({data,loading,reload}:{data:any;loading:boolean;reload:()=>void}){
+  const [selectedBin,setSelectedBin]=useState("all"),[search,setSearch]=useState(""),[checked,setChecked]=useState<Set<string>>(new Set());
+  const groups=(data?.groups||[]).map((group:any)=>({...group,cards:(group.cards||[]).filter((card:any)=>!search||`${card.sku} ${card.title} ${card.ebayListingId||""}`.toLowerCase().includes(search.toLowerCase()))})).filter((group:any)=>(selectedBin==="all"||group.bin===selectedBin)&&group.cards.length);
+  const visible=groups.reduce((sum:number,group:any)=>sum+group.cards.length,0),verified=groups.reduce((sum:number,group:any)=>sum+group.cards.filter((card:any)=>checked.has(card.id)).length,0);
+  const toggle=(id:string)=>setChecked(current=>{const next=new Set(current);next.has(id)?next.delete(id):next.add(id);return next;});
+  return <div className="stack bin-audit-page">
+    <Intro title="Bin Reconciliation" text="Check every physical card in SKU order. Select one bin for a focused audit, or print the complete grouped checklist." action={<button className="secondary bin-print" onClick={()=>window.print()}><Printer/>Print checklist</button>}/>
+    <div className="metrics bin-audit-metrics"><Metric n={data?.bins||0} t="Bins" d="Detected SKU groups"/><Metric n={data?.total||0} t="Physical cards" d="Available and allocated"/><Metric n={visible} t="Showing" d="Current filter"/><Metric n={`${verified}/${visible}`} t="Checked" d="This browser session"/></div>
+    <section className="panel bin-audit-controls">
+      <div className="toolbar">
+        <label><Search/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search SKU, card, or eBay listing…"/></label>
+        <select value={selectedBin} onChange={e=>setSelectedBin(e.target.value)}><option value="all">All bins</option>{(data?.groups||[]).map((group:any)=><option key={group.bin} value={group.bin}>{group.bin} ({group.count})</option>)}</select>
+        <button className="secondary" disabled={loading} onClick={reload}><RefreshCw className={loading?"spin":""}/>{loading?"Loading…":"Refresh"}</button>
+        <button className="secondary" disabled={!checked.size} onClick={()=>setChecked(new Set())}>Clear checks</button>
+      </div>
+    </section>
+    {loading&&!data?<Empty text="Loading physical SKU locations…"/>:groups.length?groups.map((group:any)=><section className="panel bin-audit-group" key={group.bin}>
+      <div className="title"><div><small>BIN / TAB</small><h3>{group.bin}</h3></div><span className="count">{group.cards.length} card{group.cards.length===1?"":"s"}</span></div>
+      <div className="bin-audit-table"><table><thead><tr><th>Check</th><th>Position</th><th>Full SKU</th><th>Card</th><th>Set / condition</th><th>Game</th><th>Status</th><th>eBay listing</th></tr></thead><tbody>{group.cards.map((card:any)=><tr className={checked.has(card.id)?"audited":""} key={card.id}>
+        <td><input className="audit-check" type="checkbox" checked={checked.has(card.id)} onChange={()=>toggle(card.id)} aria-label={`Verify ${card.sku}`}/></td><td className="mono"><b>{card.positionLabel}</b></td><td className="mono">{card.sku}</td><td><b>{card.title}</b></td><td>{card.setName||"—"}<small>{card.condition||"Condition unavailable"}</small></td><td>{card.game}</td><td><span className={`pill ${card.status==="available"?"matched":"missing"}`}>{card.status}</span>{card.sourceOrderId&&<small>Order {card.sourceOrderId}</small>}</td><td className="mono">{card.ebayListingId||"—"}</td>
+      </tr>)}</tbody></table></div>
+    </section>):<Empty text="No physical SKU locations match this bin or search."/>}
+  </div>;
 }
 function Orders({ rows, loading, reload, notify, confirmAction }: { rows: any[]; loading: boolean; reload: () => Promise<void>; notify: (message: string) => void; confirmAction: ConfirmAction }) {
   const [shipping, setShipping] = useState<string | null>(null);
