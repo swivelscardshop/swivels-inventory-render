@@ -884,7 +884,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
     } catch(e) { notify(e instanceof Error?e.message:"Mana Pool sync failed"); } finally { setWorking(false); }
   };
   const orders = async () => {
-    setWorking(true); try { const r=await fetch("/api/manapool",{method:"PATCH"}); const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Order import failed"); notify(`Imported ${b.orders} Mana Pool orders and ${b.lines} order lines.`); } catch(e){notify(e instanceof Error?e.message:"Order import failed");} finally{setWorking(false);}
+    setWorking(true); try { const r=await fetch("/api/manapool",{method:"PATCH"}); const b:any=await r.json(); if(!r.ok&&r.status!==207) throw new Error(b.error||"Order import failed"); notify(`Imported ${b.lines} Mana Pool order line${b.lines===1?"":"s"}${b.refunded?`; removed ${b.refunded} refunded line${b.refunded===1?"":"s"}`:""}${b.completed?`; closed ${b.completed} completed line${b.completed===1?"":"s"}`:""}.`); } catch(e){notify(e instanceof Error?e.message:"Order import failed");} finally{setWorking(false);}
   };
   const enableWebhooks = async () => {
     if (!(await confirmAction({title:"Enable live marketplace webhooks?",message:"eBay and Mana Pool will send listing and sale events directly to this Render service. Sales will update the other marketplace even when your computer is off.",confirmLabel:"Enable live webhooks"}))) return;

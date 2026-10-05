@@ -188,10 +188,32 @@ export async function POST(request: Request) {
 export async function PATCH() {
   try {
     const summaries = await getManaPoolOrders();
-    let imported = 0, ebayReduced = 0, ebayEnded = 0, skipped = 0;
+    let imported = 0, ebayReduced = 0, ebayEnded = 0, skipped = 0, refunded = 0, completed = 0;
     const errors:string[] = [];
+    const statusValues=(value:any)=>[
+      value?.status,value?.order_status,value?.payment_status,value?.fulfillment_status,
+      value?.refund_status,value?.order?.status,value?.order?.order_status,
+      value?.order?.payment_status,value?.order?.fulfillment_status,value?.order?.refund_status,
+    ].map(x=>String(x||"").toLowerCase());
+    const isRefunded=(value:any)=>Boolean(
+      value?.refunded_at||value?.canceled_at||value?.cancelled_at||value?.order?.refunded_at||value?.order?.canceled_at||value?.order?.cancelled_at||
+      value?.refunded===true||value?.canceled===true||value?.cancelled===true||statusValues(value).some(x=>/refund|cancel/.test(x))
+    );
+    const isCompleted=(value:any)=>statusValues(value).some(x=>/shipped|fulfilled|complete|delivered/.test(x));
+    const closeStoredOrder=async(orderId:string,detail:any,wasRefunded:boolean)=>{
+      const rows=await dbAll(`marketplace_orders?select=id,listing_id,raw_payload&marketplace=eq.manapool&marketplace_order_id=eq.${encodeURIComponent(orderId)}&fulfillment_status=in.(unfulfilled,processing)`);
+      for(const row of rows){
+        const listingFilter=row.listing_id?`&listing_id=eq.${row.listing_id}`:"";
+        if(wasRefunded)await db(`physical_skus?source_order_id=eq.${encodeURIComponent(orderId)}&status=eq.allocated${listingFilter}`,{method:"PATCH",body:JSON.stringify({status:"available",source_order_id:null,updated_at:new Date().toISOString()})});
+        else await db(`physical_skus?source_order_id=eq.${encodeURIComponent(orderId)}&status=eq.allocated${listingFilter}`,{method:"DELETE"});
+        await db(`marketplace_orders?id=eq.${row.id}`,{method:"PATCH",body:JSON.stringify({fulfillment_status:"fulfilled",refunded:wasRefunded,sku_removed_at:wasRefunded?null:new Date().toISOString(),raw_payload:{...(row.raw_payload||{}),mana_pool_order:detail,reconciled_at:new Date().toISOString()}})});
+      }
+      return rows.length;
+    };
+    const shippingOrderIds=new Set(summaries.map((x:any)=>String(x.id)));
     for (const summary of summaries) {
       const detail = await getManaPoolOrder(String(summary.id));
+      if(isRefunded(detail)){refunded+=await closeStoredOrder(String(summary.id),detail,true);continue;}
       for (const item of detail?.items || detail?.order?.items || []) {
         try {
           const external = String(item.custom_external_id || item.product?.custom_external_id || "");
@@ -246,6 +268,18 @@ export async function PATCH() {
         }
       }
     }
-    return NextResponse.json({ok:errors.length===0,orders:summaries.length,lines:imported,ebayReduced,ebayEnded,skipped,errors:errors.slice(0,10)}, {status:errors.length ? 207 : 200});
+    // Refunded, canceled, or externally shipped orders disappear from Mana
+    // Pool's needs_shipping feed. Recheck open local orders so they do not stay
+    // on the dashboard forever and so refunded cards become available again.
+    const storedOpen=await dbAll("marketplace_orders?select=marketplace_order_id&marketplace=eq.manapool&fulfillment_status=in.(unfulfilled,processing)&refunded=eq.false");
+    const staleIds=[...new Set(storedOpen.map((x:any)=>String(x.marketplace_order_id)).filter((id:string)=>!shippingOrderIds.has(id)))];
+    for(const orderId of staleIds){
+      try{
+        const detail=await getManaPoolOrder(orderId);
+        if(isRefunded(detail))refunded+=await closeStoredOrder(orderId,detail,true);
+        else if(isCompleted(detail))completed+=await closeStoredOrder(orderId,detail,false);
+      }catch(error){errors.push(`${orderId}: ${error instanceof Error?error.message:"status check failed"}`);}
+    }
+    return NextResponse.json({ok:errors.length===0,orders:summaries.length,lines:imported,ebayReduced,ebayEnded,refunded,completed,skipped,errors:errors.slice(0,10)}, {status:errors.length ? 207 : 200});
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Mana Pool order import failed" }, { status: 500 }); }
 }
