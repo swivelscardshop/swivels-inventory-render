@@ -72,3 +72,9 @@ Supabase project are connected.
 - Full catalog safety reconciliation now checks counts every 10 minutes and performs a full import at most every 2 hours unless the count differs.
 - Coalesced bursts of ItemListed, ItemRevised, and ItemClosed notifications into one catalog import per claimed batch.
 - Quantity and end-listing actions now explain that eBay made no change when its daily API quota is exhausted.
+
+## 1.11.6-automation-safety.18
+
+- Fixed successfully ended eBay listings being recreated in Exception Center during the immediate refresh.
+- Inventory reconciliation now considers active eBay listings only in both normal imports and Exception Center refreshes.
+- Existing stale exceptions for inactive/ended listings are automatically resolved the next time Exception Center loads.

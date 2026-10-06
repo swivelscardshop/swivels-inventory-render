@@ -145,15 +145,17 @@ export async function POST() {
 
     // Rebuild quantity discrepancies without altering either eBay quantity or locations.
     await db("reconciliation_issues?status=eq.open", { method: "PATCH", body: JSON.stringify({ status: "resolved", last_seen_at: new Date().toISOString() }) });
-    const [differences,dismissedIssues,allocatedSkus] = await Promise.all([
+    const [differences,activeReconciliationListings,dismissedIssues,allocatedSkus] = await Promise.all([
       db("listing_reconciliation?select=id,ebay_quantity,active_sku_count,difference&difference=neq.0"),
+      dbAll("marketplace_listings?select=id&ebay_status=eq.active"),
       dbAll("reconciliation_issues?select=listing_id,issue_type&status=eq.ignored"),
       dbAll("physical_skus?select=listing_id&status=eq.allocated"),
     ]);
+    const activeReconciliationIds=new Set((activeReconciliationListings||[]).map((row:any)=>String(row.id)));
     const dismissedIssueKeys=new Set((dismissedIssues||[]).map((x:any)=>`${x.listing_id}|${x.issue_type}`));
     const allocatedByListing=new Map<string,number>();
     for(const row of allocatedSkus||[]) allocatedByListing.set(String(row.listing_id),(allocatedByListing.get(String(row.listing_id))||0)+1);
-    const issues = differences.map((x: any) => {
+    const issues = differences.filter((x:any)=>activeReconciliationIds.has(String(x.id))).map((x: any) => {
       const availableSkuCount=Math.max(0,Number(x.active_sku_count)-(allocatedByListing.get(String(x.id))||0));
       const difference=Number(x.ebay_quantity)-availableSkuCount;
       return {listing_id:x.id,issue_type:difference>0?"missing_sku":"extra_sku",ebay_quantity:Number(x.ebay_quantity),active_sku_count:availableSkuCount,status:"open",last_seen_at:new Date().toISOString(),details:{difference}};
