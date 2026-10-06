@@ -190,11 +190,22 @@ export async function PATCH() {
     const summaries = await getManaPoolOrders();
     let imported = 0, ebayReduced = 0, ebayEnded = 0, skipped = 0, refunded = 0, completed = 0;
     const errors:string[] = [];
-    const statusValues=(value:any)=>[
-      value?.status,value?.order_status,value?.payment_status,value?.fulfillment_status,
-      value?.refund_status,value?.order?.status,value?.order?.order_status,
-      value?.order?.payment_status,value?.order?.fulfillment_status,value?.order?.refund_status,
-    ].map(x=>String(x||"").toLowerCase());
+    const statusValues=(value:any)=>{
+      const values:string[]=[];
+      const visit=(node:any,depth=0)=>{
+        if(!node||typeof node!=="object"||depth>6)return;
+        for(const [key,child] of Object.entries(node)){
+          const normalizedKey=key.toLowerCase();
+          if(child!==null&&typeof child!=="object"){
+            const text=String(child).trim().toLowerCase();
+            if(/status|state|reason|type/.test(normalizedKey)&&text)values.push(text);
+            if(/refund|cancel/.test(normalizedKey)&&text&&!/^(false|none|null|0|no)$/.test(text))values.push(`${normalizedKey}:${text}`);
+          }else visit(child,depth+1);
+        }
+      };
+      visit(value);
+      return values;
+    };
     const isRefunded=(value:any)=>Boolean(
       value?.refunded_at||value?.canceled_at||value?.cancelled_at||value?.order?.refunded_at||value?.order?.canceled_at||value?.order?.cancelled_at||
       value?.refunded===true||value?.canceled===true||value?.cancelled===true||statusValues(value).some(x=>/refund|cancel/.test(x))
@@ -213,7 +224,7 @@ export async function PATCH() {
     const shippingOrderIds=new Set(summaries.map((x:any)=>String(x.id)));
     for (const summary of summaries) {
       const detail = await getManaPoolOrder(String(summary.id));
-      if(isRefunded(detail)){refunded+=await closeStoredOrder(String(summary.id),detail,true);continue;}
+      if(isRefunded(summary)||isRefunded(detail)){refunded+=await closeStoredOrder(String(summary.id),detail,true);continue;}
       for (const item of detail?.items || detail?.order?.items || []) {
         try {
           const external = String(item.custom_external_id || item.product?.custom_external_id || "");

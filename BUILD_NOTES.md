@@ -91,3 +91,9 @@ Supabase project are connected.
 - Fixed the Orders page visibly clearing and showing its loading state every 15 seconds.
 - Live order polling now refreshes silently while the page remains visible.
 - Initial page loading and manual post-action refreshes still display the normal loading state.
+
+## 1.11.6-automation-safety.21
+
+- Fixed refunded Mana Pool orders remaining in Orders to fulfill when refund or cancellation status is nested in the order response.
+- Checks both Mana Pool order summaries and full order details for refund/cancellation state.
+- A detected refund closes the stored order and releases its allocated physical SKU back to available inventory.
