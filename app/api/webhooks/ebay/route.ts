@@ -45,17 +45,23 @@ export async function POST(request:Request) {
   const eventKey = webhookEventKey("ebay-webhook", event, raw);
   await beginSyncEvent({source:"ebay-webhook",eventKey,eventType:event,payload:{bytes:raw.length}}).catch(()=>{});
   await saveResult(event,"received; processing");
+  // Catalog notifications are intentionally handled only by the durable
+  // worker. Waiting for its short debounce window coalesces a scheduled batch
+  // into one import and prevents this request plus the worker from scanning the
+  // entire eBay catalog twice.
+  if(event==="ItemListed"){
+    await saveResult(event,"received; queued for catalog import");
+    return new NextResponse("OK",{status:200,headers:{"Content-Type":"text/plain"}});
+  }
   // The payload is a signal only. Inventory is rebuilt from authenticated eBay
   // APIs, so a forged request cannot supply quantities or listing data.
   after(async()=>{
     try {
       // A sale only needs the lightweight order importer. A newly-created
       // listing needs the catalog import so it can be mapped and published.
-      const handler = event==="FixedPriceTransaction"
-        ? await import("@/app/api/orders/import/route")
-        : await import("@/app/api/sync/route");
+      const handler = await import("@/app/api/orders/import/route");
       let body:any={};
-      const attempts=event==="FixedPriceTransaction"?3:1;
+      const attempts=3;
       for(let attempt=1;attempt<=attempts;attempt+=1){
         const response=await handler.POST();
         if(!response.ok) {
@@ -67,14 +73,12 @@ export async function POST(request:Request) {
           continue;
         }
         body=await response.json().catch(()=>({}));
-        if(event!=="FixedPriceTransaction" || Number(body.imported||0)>0 || attempt===attempts)break;
+        if(Number(body.imported||0)>0 || attempt===attempts)break;
         // eBay occasionally sends the notification just before the order is
         // visible through Fulfillment. Retry only this event, never on a timer.
         await new Promise(resolve=>setTimeout(resolve,attempt*5000));
       }
-      await saveResult(event,event==="FixedPriceTransaction"
-        ? `order import completed: ${Number(body.imported||0)} new, ${Number(body.updated||0)} refreshed`
-        : "listing import completed");
+      await saveResult(event,`order import completed: ${Number(body.imported||0)} new, ${Number(body.updated||0)} refreshed`);
       await finishSyncEvent(eventKey,"processed").catch(()=>{});
     }
     catch (error) {

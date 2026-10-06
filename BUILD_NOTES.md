@@ -78,3 +78,10 @@ Supabase project are connected.
 - Fixed successfully ended eBay listings being recreated in Exception Center during the immediate refresh.
 - Inventory reconciliation now considers active eBay listings only in both normal imports and Exception Center refreshes.
 - Existing stale exceptions for inactive/ended listings are automatically resolved the next time Exception Center loads.
+
+## 1.11.6-automation-safety.19
+
+- Removed duplicate full-catalog processing for ItemListed webhooks; the durable worker now owns catalog webhook imports.
+- Added a 30-minute hard cooldown shared by catalog webhooks and mismatch recovery scans.
+- Persistent dashboard count differences can no longer force a 60+ call catalog scan every 10 minutes.
+- Lightweight eBay order recovery remains every 2 minutes and sale webhooks remain immediate.
