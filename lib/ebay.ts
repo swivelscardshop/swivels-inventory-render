@@ -301,6 +301,9 @@ async function tradingCall(callName: string, xml: string) {
     const parsed: any = new XMLParser({ ignoreAttributes: false }).parse(text);
     const root = parsed?.[`${callName}Response`];
     const message = arr<any>(root?.Errors).map(x => x.LongMessage || x.ShortMessage).filter(Boolean).join("; ");
+    if (/exceeded usage limit|call usage|call limit|GetAPIAccessRules/i.test(message)) {
+      throw new Error("eBay's daily API call limit has been reached. eBay did not make this change. The exception remains open; retry after eBay resets the quota.");
+    }
     throw new Error(message || `eBay ${callName} failed (${response.status})`);
   }
   const parsed: any = new XMLParser({ ignoreAttributes: false }).parse(text);

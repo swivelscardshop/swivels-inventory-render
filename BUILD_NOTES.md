@@ -64,3 +64,11 @@ Supabase project are connected.
 - Added worker heartbeat, last recovery result, and verified subscription status to Sync Control and `/api/health`.
 - Removed the order import that previously ran only when somebody opened the website.
 - Run `supabase/v1.11.5-hosted-automation.sql` once after deployment.
+
+## 1.11.6-automation-safety.17
+
+- Fixed the hosted worker exhausting eBay's Trading API quota with full-catalog imports every 10 minutes.
+- Webhook events are still claimed every 15 seconds and missed orders are still checked every 2 minutes.
+- Full catalog safety reconciliation now checks counts every 10 minutes and performs a full import at most every 2 hours unless the count differs.
+- Coalesced bursts of ItemListed, ItemRevised, and ItemClosed notifications into one catalog import per claimed batch.
+- Quantity and end-listing actions now explain that eBay made no change when its daily API quota is exhausted.
