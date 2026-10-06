@@ -97,3 +97,9 @@ Supabase project are connected.
 - Fixed refunded Mana Pool orders remaining in Orders to fulfill when refund or cancellation status is nested in the order response.
 - Checks both Mana Pool order summaries and full order details for refund/cancellation state.
 - A detected refund closes the stored order and releases its allocated physical SKU back to available inventory.
+
+## 1.11.6-automation-safety.22
+
+- Treats Mana Pool's `Replaced by a Different Order` state as a closed/voided order.
+- Removes the replaced order from Orders to fulfill and releases its allocated SKU.
+- Any separate replacement order remains eligible for normal import and fulfillment.

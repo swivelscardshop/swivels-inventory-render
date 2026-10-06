@@ -199,7 +199,7 @@ export async function PATCH() {
           if(child!==null&&typeof child!=="object"){
             const text=String(child).trim().toLowerCase();
             if(/status|state|reason|type/.test(normalizedKey)&&text)values.push(text);
-            if(/refund|cancel/.test(normalizedKey)&&text&&!/^(false|none|null|0|no)$/.test(text))values.push(`${normalizedKey}:${text}`);
+            if(/refund|cancel|replace/.test(normalizedKey)&&text&&!/^(false|none|null|0|no)$/.test(text))values.push(`${normalizedKey}:${text}`);
           }else visit(child,depth+1);
         }
       };
@@ -208,7 +208,7 @@ export async function PATCH() {
     };
     const isRefunded=(value:any)=>Boolean(
       value?.refunded_at||value?.canceled_at||value?.cancelled_at||value?.order?.refunded_at||value?.order?.canceled_at||value?.order?.cancelled_at||
-      value?.refunded===true||value?.canceled===true||value?.cancelled===true||statusValues(value).some(x=>/refund|cancel/.test(x))
+      value?.refunded===true||value?.canceled===true||value?.cancelled===true||value?.replaced===true||statusValues(value).some(x=>/refund|cancel|replac(ed|ement)?/.test(x))
     );
     const isCompleted=(value:any)=>statusValues(value).some(x=>/shipped|fulfilled|complete|delivered/.test(x));
     const closeStoredOrder=async(orderId:string,detail:any,wasRefunded:boolean)=>{
