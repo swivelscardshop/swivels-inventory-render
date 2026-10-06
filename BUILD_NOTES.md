@@ -85,3 +85,9 @@ Supabase project are connected.
 - Added a 30-minute hard cooldown shared by catalog webhooks and mismatch recovery scans.
 - Persistent dashboard count differences can no longer force a 60+ call catalog scan every 10 minutes.
 - Lightweight eBay order recovery remains every 2 minutes and sale webhooks remain immediate.
+
+## 1.11.6-automation-safety.20
+
+- Fixed the Orders page visibly clearing and showing its loading state every 15 seconds.
+- Live order polling now refreshes silently while the page remains visible.
+- Initial page loading and manual post-action refreshes still display the normal loading state.

@@ -1,6 +1,6 @@
 {
   "name": "swivels-inventory",
-  "version": "1.11.6-automation-safety.19",
+  "version": "1.11.6-automation-safety.20",
   "private": true,
   "engines": {
     "node": "22.x"

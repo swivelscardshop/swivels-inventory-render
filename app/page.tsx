@@ -144,8 +144,8 @@ export default function Home() {
     },
     [],
   );
-  const loadOrders = useCallback(async () => {
-    setLoading(true);
+  const loadOrders = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
       const b: any = await fetch("/api/orders", { cache: "no-store" }).then(
         (r) => r.json(),
@@ -155,7 +155,7 @@ export default function Home() {
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Orders failed");
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, []);
   const loadDuplicates = useCallback(async () => {
@@ -193,8 +193,8 @@ export default function Home() {
   },[view,status.ready,binAudit]);
   useEffect(() => {
     if (view !== "orders" || !status.ready) return;
-    loadOrders();
-    const timer=window.setInterval(()=>{if(document.visibilityState==="visible")loadOrders();},15000);
+    loadOrders(true);
+    const timer=window.setInterval(()=>{if(document.visibilityState==="visible")loadOrders(false);},15000);
     return ()=>window.clearInterval(timer);
   }, [view, status.ready, loadOrders]);
   useEffect(()=>{
