@@ -103,3 +103,10 @@ Supabase project are connected.
 - Treats Mana Pool's `Replaced by a Different Order` state as a closed/voided order.
 - Removes the replaced order from Orders to fulfill and releases its allocated SKU.
 - Any separate replacement order remains eligible for normal import and fulfillment.
+
+## 1.11.6-automation-safety.23
+
+- New CSV duplicate groups now show the primary eBay SKU separately from every Supabase pull SKU.
+- CSV download stays locked until all physical SKUs have been saved and verified in `pending_skus`.
+- Pending SKU attachment verifies the final listing relationship before removing its queue record.
+- A SKU already attached to a different listing is never silently moved or reported as saved.

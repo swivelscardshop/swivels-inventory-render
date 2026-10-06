@@ -53,10 +53,10 @@ export async function POST(request: NextRequest) {
       return {listingId,ebayListingId:first.ebayListingId,existingTitle:first.existingTitle,existingQuantity:Number(first.existingQuantity||0),resultQuantity:Number(first.existingQuantity||0)+copies.length,existingSku:first.existingSku,existingLocations:first.existingLocations,incomingSkus:copies.map((x:any)=>x.sku),incomingTitles:[...new Set(copies.map((x:any)=>x.incomingTitle))]};
     });
     const newGroups=Array.from(incoming.entries()).filter(([key])=>!(existingByKey.get(key)||[]).length).map(([key,group])=>({
-      matchKey:key,title:group[0]["*Title"],quantity:group.reduce((sum,row)=>sum+Math.max(1,Number(row["*Quantity"]||1)),0),rowCount:group.length,skus:group.map(row=>row.CustomLabel),isDuplicate:group.length>1,
+      matchKey:key,title:group[0]["*Title"],primarySku:group[0].CustomLabel,quantity:group.reduce((sum,row)=>sum+Math.max(1,Number(row["*Quantity"]||1)),0),rowCount:group.length,skus:group.map(row=>row.CustomLabel),isDuplicate:group.length>1,
     }));
     const newCsv = stringify(newOutput, { header: true, columns: headers, quoted: true, record_delimiter: "\r\n" });
-    return NextResponse.json({ fileName: file.name.replace(/\.csv$/i, "") + "_NEW-LISTINGS-ONLY.csv", totalRows: rows.length, newListings: newOutput.length, newCopies: pending.length, newDuplicateCopies:Math.max(0,pending.length-newOutput.length), existingMatchGroups,newGroups, matchedCopies: matches.length, conflicts, invalid, matches, pending, newCsv });
+    return NextResponse.json({ fileName: file.name.replace(/\.csv$/i, "") + "_NEW-LISTINGS-ONLY.csv", totalRows: rows.length, newListings: newOutput.length, newCopies: pending.length, newDuplicateCopies:Math.max(0,pending.length-newOutput.length), existingMatchGroups,newGroups, matchedCopies: matches.length, conflicts, invalid, matches, pending, newCsv, skusConfirmed:false });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "CSV preview failed" }, { status: 400 });
   }

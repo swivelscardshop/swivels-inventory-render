@@ -78,12 +78,37 @@ export async function POST(request: Request) {
       quantitiesUpdated += 1;
       skusStored += fresh.length;
     }
-    if (pending.length)
+    const uniquePending = Array.from(
+      new Map(
+        pending
+          .filter((x: any) => x.matchKey && x.sku)
+          .map((x: any) => [String(x.sku), x]),
+      ).values(),
+    ) as any[];
+    if (uniquePending.length) {
+      const pendingSkus = uniquePending.map((x: any) => String(x.sku));
+      const assigned: any[] = [];
+      for (let i = 0; i < pendingSkus.length; i += 100)
+        assigned.push(
+          ...(await db(
+            `physical_skus?select=sku,listing_id&sku=in.(${pendingSkus
+              .slice(i, i + 100)
+              .map(encodeURIComponent)
+              .join(",")})`,
+          )),
+        );
+      if (assigned.length)
+        throw new Error(
+          `${assigned.length} CSV SKU(s) are already attached to an eBay listing: ${assigned
+            .slice(0, 5)
+            .map((x) => x.sku)
+            .join(", ")}. Remove or correct those rows, then preview again.`,
+        );
       await db("pending_skus?on_conflict=sku", {
         method: "POST",
-        headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify(
-          pending.map((x: any) => ({
+          uniquePending.map((x: any) => ({
             match_key: x.matchKey,
             primary_sku: x.primarySku || x.sku,
             sku: x.sku,
@@ -92,11 +117,31 @@ export async function POST(request: Request) {
           })),
         ),
       });
+      const verified: any[] = [];
+      for (let i = 0; i < pendingSkus.length; i += 100)
+        verified.push(
+          ...(await db(
+            `pending_skus?select=sku,match_key,primary_sku&sku=in.(${pendingSkus
+              .slice(i, i + 100)
+              .map(encodeURIComponent)
+              .join(",")})`,
+          )),
+        );
+      const verifiedBySku = new Map(verified.map((x) => [String(x.sku), x]));
+      const missing = uniquePending.filter((x: any) => {
+        const saved = verifiedBySku.get(String(x.sku));
+        return !saved || saved.match_key !== x.matchKey || saved.primary_sku !== (x.primarySku || x.sku);
+      });
+      if (missing.length)
+        throw new Error(
+          `Supabase did not verify ${missing.length} pending SKU(s). Do not upload the generated eBay CSV yet.`,
+        );
+    }
     return NextResponse.json({
       ok: true,
       quantitiesUpdated,
       skusStored,
-      pendingStored: pending.length,
+      pendingStored: uniquePending.length,
     });
   } catch (error) {
     return NextResponse.json(

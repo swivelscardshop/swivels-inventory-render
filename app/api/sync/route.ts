@@ -132,16 +132,26 @@ export async function POST() {
     const primaryToIds=new Map<string,string[]>();
     for(const row of stored)if(row.ebay_sku)primaryToIds.set(String(row.ebay_sku),[...(primaryToIds.get(String(row.ebay_sku))||[]),row.id]);
     const pending = await dbAll("pending_skus?select=id,match_key,primary_sku,sku,location_label&order=id.asc");
-    const attached: any[] = [], attachedIds: string[] = [];
+    const attachmentTargets = new Map<string, { pendingId: string; listingId: string; sku: string; locationLabel: string }>();
     for (const row of pending || []) {
       const direct=row.primary_sku?primaryToIds.get(String(row.primary_sku))||[]:[];
       const matches=direct.length===1?direct:(keyToIds.get(row.match_key)||[]);
       if (matches.length !== 1) continue;
-      attached.push({ listing_id: matches[0], sku: row.sku, location_label: row.location_label, status: "available", source: "csv_intake", updated_at: new Date().toISOString() });
-      attachedIds.push(row.id);
+      attachmentTargets.set(String(row.sku), { pendingId: row.id, listingId: matches[0], sku: row.sku, locationLabel: row.location_label });
     }
-    for (const group of chunks(attached)) await db("physical_skus?on_conflict=sku", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(group) });
-    for (const group of chunks(attachedIds, 100)) await db(`pending_skus?id=in.(${group.join(",")})`, { method: "DELETE" });
+    const targetSkus=[...attachmentTargets.keys()];
+    const existingTargetSkus:any[]=[];
+    for(const group of chunks(targetSkus,100)) existingTargetSkus.push(...await db(`physical_skus?select=sku,listing_id&sku=in.(${group.map(encodeURIComponent).join(",")})`));
+    const existingBySku=new Map(existingTargetSkus.map((row:any)=>[String(row.sku),String(row.listing_id)]));
+    const newAttachments=[...attachmentTargets.values()].filter((row)=>!existingBySku.has(row.sku)).map((row)=>({listing_id:row.listingId,sku:row.sku,location_label:row.locationLabel,status:"available",source:"csv_intake",updated_at:new Date().toISOString()}));
+    for (const group of chunks(newAttachments)) await db("physical_skus?on_conflict=sku", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(group) });
+    const verifiedAttachments:any[]=[];
+    for(const group of chunks(targetSkus,100)) verifiedAttachments.push(...await db(`physical_skus?select=sku,listing_id&sku=in.(${group.map(encodeURIComponent).join(",")})`));
+    const attachedIds=verifiedAttachments.flatMap((row:any)=>{
+      const target=attachmentTargets.get(String(row.sku));
+      return target&&String(row.listing_id)===String(target.listingId)?[target.pendingId]:[];
+    });
+    for (const group of chunks([...new Set(attachedIds)], 100)) await db(`pending_skus?id=in.(${group.join(",")})`, { method: "DELETE" });
 
     // Rebuild quantity discrepancies without altering either eBay quantity or locations.
     await db("reconciliation_issues?status=eq.open", { method: "PATCH", body: JSON.stringify({ status: "resolved", last_seen_at: new Date().toISOString() }) });

@@ -1247,6 +1247,10 @@ function CsvIntake({
   };
   const download = () => {
     if (!data?.newCsv) return;
+    if (!data?.skusConfirmed) {
+      setMessage("Save all SKUs in Supabase before downloading the eBay CSV.");
+      return;
+    }
     const url = URL.createObjectURL(
       new Blob([data.newCsv], { type: "text/csv;charset=utf-8" }),
     );
@@ -1280,6 +1284,7 @@ function CsvIntake({
       setMessage(
         `CSV applied: ${b.skusStored} SKUs added to existing listings and ${b.pendingStored} SKUs saved for new listings.`,
       );
+      setData({ ...data, skusConfirmed: true, pendingStored: b.pendingStored });
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Apply failed");
     } finally {
@@ -1359,15 +1364,15 @@ function CsvIntake({
               onClick={apply}
             >
               <Check />
-              Confirm matches &amp; apply SKUs
+              1. Save all SKUs
             </button>
             <button
               className="secondary"
-              disabled={!data.newCsv}
+              disabled={!data.newCsv || !data.skusConfirmed || busy}
               onClick={download}
             >
               <Download />
-              Download {data.newListings} new listings
+              2. Download {data.newListings} new listings
             </button>
           </div>
           <section className="panel">
@@ -1386,11 +1391,11 @@ function CsvIntake({
           </section>}
           {!!data.newGroups?.length && <section className="panel">
             <Title k="NEW LISTING GROUPS" t={`${data.newCopies} cards → ${data.newListings} eBay listings`} />
-            <p className="bodycopy">Duplicate cards within the CSV are combined into one output listing with the total quantity shown below. All individual SKUs remain saved for their pull locations.</p>
+            <p className="bodycopy">Duplicate cards within the CSV are combined into one output listing with the total quantity shown below. The primary SKU goes to eBay; every additional pull SKU is saved in Supabase and will attach automatically after the listing becomes active.</p>
             {!!data.newDuplicateCopies&&<div className="mapping-summary"><b>{data.newDuplicateCopies} additional duplicate copies combined</b><small>This is the difference between the physical-card count and the number of new listing rows.</small></div>}
             <div className="mapping-review">{data.newGroups.map((group:any)=><details className="mapping-card" key={group.matchKey} open={group.isDuplicate}>
               <summary><b>{group.title}</b><small>{group.isDuplicate?`${group.rowCount} CSV rows combined into quantity ${group.quantity}`:"One new listing"}</small></summary>
-              <div className="mapping-options"><span><b>Supabase pull SKUs</b><small>{group.skus.join(", ")}</small></span></div>
+              <div className="mapping-options"><span><b>Primary eBay SKU</b><small>{group.primarySku}</small></span><span><b>All Supabase pull SKUs</b><small>{group.skus.join(", ")}</small></span></div>
             </details>)}</div>
           </section>}
         </>
