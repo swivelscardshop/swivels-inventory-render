@@ -1,0 +1,226 @@
+type ListingIdentity = {
+  title: string;
+  card_name?: string | null;
+  card_number?: string | null;
+  set_name?: string | null;
+};
+
+export type ScryfallCandidate = {
+  id: string;
+  name: string;
+  set: string;
+  set_name: string;
+  collector_number: string;
+  image_url: string | null;
+};
+
+const clean = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
+
+type SetIdentity = { name: string; normalized: string; words: string[] };
+let setCatalogCache: { expires: number; rows: SetIdentity[] } | null = null;
+
+async function scryfallSetCatalog(get: (url: string) => Promise<any>): Promise<SetIdentity[]> {
+  if (setCatalogCache && setCatalogCache.expires > Date.now()) return setCatalogCache.rows;
+  const body = await get("https://api.scryfall.com/sets");
+  const rows: SetIdentity[] = (body?.data || []).flatMap((set: any) => {
+    const name = String(set.name || "").trim(), normalized = clean(name);
+    return name && normalized ? [{ name, normalized, words: normalized.split(" ") }] : [];
+  }).sort((a:SetIdentity,b:SetIdentity)=>b.words.length-a.words.length);
+  setCatalogCache={expires:Date.now()+24*60*60_000,rows}; return rows;
+}
+
+async function inferNameAndSetWithoutNumber(rawName:string,get:(url:string)=>Promise<any>){
+  const words=clean(rawName).split(" ").filter(Boolean),sets=await scryfallSetCatalog(get);
+  for(const set of sets){
+    const aliases=[set.words,...(set.normalized==="the list"?[["the","list","reprints"]]:[])];
+    for(const suffix of aliases){
+      if(words.length<=suffix.length||!suffix.every((word,index)=>words[words.length-suffix.length+index]===word))continue;
+      return {name:words.slice(0,-suffix.length).join(" "),setName:set.name};
+    }
+  }
+  return null;
+}
+
+function setNamesMatch(left: string, right: string, token = false) {
+  const a = clean(left);
+  const b = clean(right);
+  if (!a || !b) return false;
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+  // eBay/Card Uploader commonly shortens this family to "The Lord of the
+  // Rings", while Scryfall and Mana Pool use "Tales of Middle-earth Tokens"
+  // or "The Lord of the Rings: Tales of Middle-earth Tokens". For token
+  // listings these names identify the same token set.
+  const lordOfRings = (value: string) =>
+    /\blord of the rings\b/.test(value) || /\btales of middle earth\b/.test(value);
+  const tokenSet = (value: string) => /\btokens?\b/.test(value);
+  return token && lordOfRings(a) && lordOfRings(b) && (tokenSet(a) || tokenSet(b));
+}
+
+export function collectorKey(value: string | null | undefined) {
+  const raw = String(value || "").split("/")[0].trim().toLowerCase();
+  // Scryfall uses helper-card numbers such as H13-H13 while Card Uploader
+  // titles usually contain only 13. Preserve the H prefix when it exists so
+  // helper aliases can target the exact printing.
+  const helper = raw.match(/^h0*(\d+)(?:-h?0*\d+)?$/i);
+  if (helper) return `h${Number(helper[1])}`;
+  // Scryfall prefixes token collector numbers with T (for example T005),
+  // while eBay titles and Mana Pool display the same token as 5 or 0005.
+  const match = raw.match(/^t?0*(\d+)([a-z]*)$/i);
+  return match ? `${Number(match[1])}${match[2] || ""}` : clean(raw);
+}
+
+export function titleIdentity(row: ListingIdentity) {
+  // Card Uploader adds display variants such as (Showcase), (Borderless),
+  // or a repeated collector number like (0271). These labels are not part of
+  // the Scryfall card name, so ignore the parentheses and everything in them.
+  const title = String(row.title || "").replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+  const gameMarker = title.search(/\s+(?:Magic\s*:\s*The Gathering|Magic The Gathering|MTG)\b/i);
+  const identitySection = (gameMarker >= 0 ? title.slice(0, gameMarker) : title).trim();
+  const finishMatch = identitySection.match(/(?:^|\s)(Etched Foil|Non[- ]?Foil|Foil)(?=\s|$)/i);
+  const beforeFinish = identitySection.replace(/(?:^|\s)(Etched Foil|Non[- ]?Foil|Foil)(?=\s|$)/ig, " ").replace(/\s+/g," ").trim();
+  const slashNumber = beforeFinish.match(/\b([A-Z]?\d{1,4}[a-z]?)\s*\/\s*\d{1,4}\b/i);
+  // Magic titles use a plain collector number between the card name and set
+  // name. eBay item specifics are preferred when present; otherwise locate
+  // that positional number in the title.
+  const plainNumbers = [...beforeFinish.matchAll(/(?:^|\s)([A-Z]?\d{1,4}[a-z]?)(?=\s|$)/gi)];
+  const positional = slashNumber || plainNumbers.find((match) => {
+    const start = match.index == null ? -1 : match.index + match[0].length - match[1].length;
+    return start > 1 && beforeFinish.slice(start + match[1].length).trim().length > 1;
+  });
+  const number = String(row.card_number || positional?.[1] || "").split("/")[0].trim();
+  const numberIndex = positional?.index == null ? -1 : positional.index + positional[0].length - positional[1].length;
+  let name = String(row.card_name || "").replace(/\([^)]*\)/g, " ").replace(/\s+/g," ").trim();
+  if (!name && numberIndex >= 0) name = beforeFinish.slice(0, numberIndex).trim();
+  if (!name) {
+    name = title
+      .replace(/\b(Magic: The Gathering|Magic The Gathering|MTG|TCG|English|Japanese|Near Mint|Lightly Played|Moderately Played|Heavily Played|Damaged|NM|LP|MP|HP|DMG|Non[- ]?Foil|Foil|Etched Foil)\b/gi, " ")
+      .replace(/\s+/g, " ").trim();
+  }
+  const inferredSet = numberIndex >= 0
+    ? beforeFinish.slice(numberIndex + String(positional?.[1] || "").length).trim()
+    : "";
+  const tokenCard=/\btoken\b/i.test(name);
+  const parsedSet=String(inferredSet || row.set_name || "").replace(/\([^)]*\)/g, " ").replace(/\s+/g," ").trim();
+  const canonicalSet=tokenCard&&/^the lord of the rings$/i.test(parsedSet)?"The Lord of the Rings: Tales of Middle-earth":parsedSet;
+  return {
+    name:tokenCard?name.replace(/\btoken\b/ig," ").replace(/\s+/g," ").trim():name,
+    number,
+    // The title is authoritative. Some eBay item-specific imports place the
+    // finish at the beginning of set_name (for example "Foil Lorwyn
+    // Eclipsed"), which must not be treated as the actual set name.
+    setName: canonicalSet,
+    finish: /\betched\s+foil\b/i.test(identitySection) ? "Etched Foil" :
+      (/\bfoil\b/i.test(identitySection) && !/\bnon[- ]?foil\b/i.test(identitySection) ? "Foil" : "Non-Foil"),
+  };
+}
+
+export async function findScryfallCandidates(row: ListingIdentity): Promise<ScryfallCandidate[]> {
+  let { name, number, setName } = titleIdentity(row);
+  if (!name || name.length < 2) return [];
+  const headers = { "User-Agent": "SwivelsInventory/1.10.14", Accept: "application/json" };
+  const get = async (url: string): Promise<any> => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      // Scryfall asks integrations to leave a short delay between requests.
+      // This also prevents a whole 40-card batch from being mislabeled when
+      // the catalog briefly throttles the server.
+      await new Promise(resolve => setTimeout(resolve, 125));
+      const response = await fetch(url, { cache:"no-store", headers });
+      if (response.ok) return response.json();
+      if (response.status === 404) return null;
+      if (response.status === 429 || response.status >= 500) {
+        const retryAfter = Number(response.headers.get("retry-after") || 0) * 1000;
+        await new Promise(resolve => setTimeout(resolve, Math.max(retryAfter, 500 * (attempt + 1))));
+        continue;
+      }
+      throw new Error(`Scryfall lookup failed (${response.status})`);
+    }
+    throw new Error("Scryfall lookup temporarily unavailable after retries");
+  };
+  if(!number&&!setName){const inferred=await inferNameAndSetWithoutNumber(name,get);if(!inferred)return[];name=inferred.name;setName=inferred.setName;}
+  const isRingHelper=/^the ring helper card$/i.test(name.trim());
+  const queryNumber=isRingHelper?`h${collectorKey(number)}`:collectorKey(number);
+  const isToken=/\btoken\b/i.test(String(row.title||""))||/\btokens?\b/i.test(setName);
+  const lookupName=(isRingHelper?"The Ring // The Ring Tempts You":isToken?name.replace(/\btoken\b/ig," ").replace(/\s+/g," "):name).trim();
+  const tokenNumber4=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(4,"0")}`:"";
+  const tokenNumber3=isToken&&/^\d+$/.test(queryNumber)?`T${queryNumber.padStart(3,"0")}`:"";
+  const searches=[
+    [lookupName,tokenNumber4||queryNumber],
+    [lookupName,tokenNumber3||queryNumber],
+    [lookupName,queryNumber],
+    [lookupName,""],
+    [name,queryNumber],
+  ];
+  let body:any=null; const tokenResults:any[]=[];
+  for(const [searchName,searchNumber] of searches){
+    if(!searchName)continue;
+    // Scryfall excludes token/emblem printings from normal searches unless
+    // extras are explicitly included. Mana Pool sells those printings, so an
+    // eBay title such as "Orc Army Token 0005" must search the extras catalog.
+    const terms=[`!\"${searchName.replace(/\"/g,"")}\"`,searchNumber?`cn:${searchNumber}`:"",isToken||isRingHelper?"include:extras":""].filter(Boolean).join(" ");
+    const result=await get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(terms)}&unique=prints`);
+    if(result?.data?.length){if(isToken){for(const card of result.data)if(!tokenResults.some((saved:any)=>String(saved.id)===String(card.id)))tokenResults.push(card);}else{body=result;break;}}
+  }
+  if(isToken&&tokenResults.length)body={data:tokenResults};
+  // Titles sometimes contain punctuation that Scryfall's exact-search parser
+  // rejects. Resolve the card name fuzzily, then load all of its printings.
+  if (!body?.data?.length) {
+    const named = await get(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(lookupName.slice(0, 180))}`);
+    if (!named) return [];
+    body = named.prints_search_uri ? await get(String(named.prints_search_uri)) : { data:[named] };
+  }
+  const title = clean(row.title);
+  const setHint = clean(setName);
+  let sourceCards = body?.data || [];
+  if (number) sourceCards = sourceCards.filter((card:any) => collectorKey(card.collector_number) === queryNumber);
+  let cards = sourceCards.map((card: any) => ({
+    id: String(card.id), name: String(card.name), set: String(card.set), set_name: String(card.set_name),
+    collector_number: String(card.collector_number),
+    image_url: card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal || null,
+  })) as ScryfallCandidate[];
+  if(setHint&&!number)cards=cards.filter(card=>setNamesMatch(card.set_name,setName,isToken)||setNamesMatch(String(card.set_name).split(":")[0],setName,isToken));
+  if(isToken&&setHint){const matching=cards.filter(card=>setNamesMatch(card.set_name,setName,true)||setNamesMatch(String(card.set_name).split(":")[0],setName,true));if(matching.length)cards=matching;}
+  return cards.sort((a, b) => {
+    const score = (candidate: ScryfallCandidate) => {
+      const setName = clean(candidate.set_name);
+      const setAlias = clean(candidate.set_name.split(":")[0]);
+      const hintMatches = setHint && (setNamesMatch(setName,setHint,isToken) || setNamesMatch(setAlias,setHint,isToken));
+      return (hintMatches ? 6 : 0) + (setName && title.includes(setName) ? 3 : 0) + (number && collectorKey(candidate.collector_number) === collectorKey(number) ? 2 : 0);
+    };
+    return score(b) - score(a);
+  }).slice(0, 8);
+}
+
+export function chooseScryfallCandidate(row: ListingIdentity, candidates: ScryfallCandidate[]) {
+  const normalize = (value:string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g," ").trim();
+  const normalizedTitle = normalize(row.title);
+  const parsed = titleIdentity(row);
+  const parsedIsToken=/\btoken\b/i.test(row.title)||/\btokens?\b/i.test(parsed.setName);
+  const titleMatches = candidates.filter((candidate) => {
+    const setName = normalize(candidate.set_name);
+    const setAlias = normalize(String(candidate.set_name).split(":")[0]);
+    const parsedSet = normalize(parsed.setName);
+    const numberInTitle = !parsed.number || collectorKey(candidate.collector_number) === collectorKey(parsed.number);
+    const setInTitle = (setName && normalizedTitle.includes(setName)) || (setAlias.length >= 4 && normalizedTitle.includes(setAlias)) ||
+      (parsedSet.length >= 2 && (setNamesMatch(setName,parsedSet,parsedIsToken) || setNamesMatch(setAlias,parsedSet,parsedIsToken)));
+    return Boolean(setInTitle && numberInTitle);
+  });
+  const parsedExact = candidates.filter((candidate) =>
+    setNamesMatch(candidate.set_name,parsed.setName,parsedIsToken) && collectorKey(candidate.collector_number) === collectorKey(parsed.number)
+  );
+  const exact = candidates.filter((candidate) => row.set_name && normalize(candidate.set_name) === normalize(String(row.set_name)) &&
+    (!row.card_number || collectorKey(candidate.collector_number) === collectorKey(row.card_number)));
+  return parsedExact.length === 1 ? parsedExact[0] : titleMatches.length === 1 ? titleMatches[0] : exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : null;
+}
+
+export function manaPoolVariant(row: { title:string; language?:string|null; finish?:string|null; condition_name?:string|null }) {
+  const title = row.title.toLowerCase();
+  const condition = String(row.condition_name || "").toLowerCase();
+  const language = String(row.language || "").toLowerCase();
+  const finish = String(row.finish || "").toLowerCase();
+  const conditionText = condition + " " + title;
+  const condition_id = /damaged|\bdmg\b/.test(conditionText) ? "DMG" : /heav(?:y|ily)(?:\s+play(?:ed)?)?|\bhp\b/.test(conditionText) ? "HP" : /moderat(?:e|ely)(?:\s+play(?:ed)?)?|\bmp\b/.test(conditionText) ? "MP" : /light(?:ly)?(?:\s+play(?:ed)?)?|\blp\b/.test(conditionText) ? "LP" : /near mint|\bnm\b/.test(conditionText) ? "NM" : null;
+  if (!condition_id) throw new Error(`Mana Pool condition is missing or unrecognized for: ${row.title}`);
+  const language_id = /japanese|\bjp\b/.test(language + " " + title) ? "JA" : "EN";
+  const finish_id = /etched/.test(finish + " " + title) ? "EF" : /foil/.test(finish + " " + title) && !/non[- ]?foil/.test(finish + " " + title) ? "FO" : "NF";
+  return { condition_id, language_id, finish_id };
+}
