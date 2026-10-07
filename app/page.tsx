@@ -1410,6 +1410,7 @@ function CsvIntake({
 }
 function AgingReport({data,setData,loading,load,notify}:{data:any;setData:(v:any)=>void;loading:boolean;load:(bucket?:string,game?:string,reviewed?:string,page?:number)=>Promise<void>;notify:(v:string)=>void}){
   const [working,setWorking]=useState<string|null>(null);
+  const [recommendationOpen,setRecommendationOpen]=useState<string|null>(null);
   const bucket=data?.bucket||"180",game=data?.game||"all",reviewed=data?.reviewed||"open",page=data?.page||1;
   const refresh=(changes:any={})=>load(changes.bucket||bucket,changes.game||game,changes.reviewed||reviewed,changes.page||1);
   const action=async(actionName:string,listingId?:string)=>{
@@ -1440,7 +1441,12 @@ function AgingReport({data,setData,loading,load,notify}:{data:any;setData:(v:any
         <div className="aging-stat"><small>PRICE / QTY</small><b>${Number(row.price||0).toFixed(2)} · {row.ebay_quantity}</b></div>
         <div className="aging-stat"><small>30-DAY TRAFFIC</small><b>{row.traffic_impressions==null?"Not collected":`${Number(row.traffic_impressions).toLocaleString()} imp · ${Number(row.traffic_views||0).toLocaleString()} views`}</b><em>{row.traffic_transactions!=null?`${row.traffic_transactions} sale${Number(row.traffic_transactions)===1?"":"s"}`:""}</em></div>
         <div className={`aging-recommendation ${row.recommendation?.key||"collect"}`}><small>RECOMMENDATION</small><b>{row.recommendation?.label||"Review listing"}</b></div>
-        <div className="aging-actions"><a className="secondary" href={`https://www.ebay.com/itm/${row.ebay_listing_id}`} target="_blank" rel="noreferrer">Open eBay</a><button className="primary" disabled={working!==null} onClick={()=>action(row.aging_reviewed_at?"unreview":"review",row.id)}>{working===row.id?"Saving…":row.aging_reviewed_at?"Return to queue":"Mark reviewed"}</button></div>
+        <div className="aging-actions"><a className="secondary" href={`https://www.ebay.com/itm/${row.ebay_listing_id}`} target="_blank" rel="noreferrer">Open eBay</a><button className="primary" disabled={working!==null} onClick={()=>action(row.aging_reviewed_at?"unreview":"review",row.id)}>{working===row.id?"Saving…":row.aging_reviewed_at?"Return to queue":"Mark reviewed"}</button><button className="secondary recommend-button" onClick={()=>setRecommendationOpen(recommendationOpen===row.id?null:row.id)}>{recommendationOpen===row.id?"Hide changes":"Recommend changes"}</button></div>
+        {recommendationOpen===row.id&&<div className="aging-advice">
+          <div><small>PRICE RECOMMENDATION</small><b>{row.recommendation?.price?.change?`Test $${Number(row.recommendation.price.suggested).toFixed(2)}`:`Keep $${Number(row.recommendation?.price?.suggested||1.99).toFixed(2)}`}</b><p>{row.recommendation?.price?.reason}</p></div>
+          <div><small>LISTING CHANGES TO REVIEW</small><ul>{(row.recommendation?.changes||[]).map((change:string)=><li key={change}>{change}</li>)}</ul></div>
+          <p className="aging-disclaimer">Recommendation uses listing age and stored 30-day traffic. It does not change eBay automatically and will never recommend below the $1.99 floor.</p>
+        </div>}
       </article>)}</div>:<Empty text="No active listings match these aging filters."/>}
       {!!data?.total&&<div className="pager"><button className="secondary" disabled={page<=1||loading} onClick={()=>refresh({page:page-1})}>Previous</button><span>Page {page} of {Math.max(1,Math.ceil(data.total/data.pageSize))}</span><button className="secondary" disabled={page*data.pageSize>=data.total||loading} onClick={()=>refresh({page:page+1})}>Next</button></div>}
     </section>

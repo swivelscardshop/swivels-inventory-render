@@ -117,3 +117,10 @@ Supabase project are connected.
 - The combine action now uses the synchronized records for only the selected listings and proceeds directly to eBay quantity/end-listing calls.
 - Added a persistent progress, completion, or error status directly above the Mana Pool conflict list.
 - Render HTML/error responses are surfaced instead of being swallowed as an unreadable JSON failure.
+
+## 1.11.6-automation-safety.25
+
+- Added a per-listing `Recommend changes` button beside the Aging Report actions.
+- Recommendations now include title, item-specific, photo/promotion, and price guidance.
+- Price suggestions use listing age and stored 30-day traffic and never go below the $1.99 floor.
+- Suggestions remain review-only and never modify a live eBay listing automatically.

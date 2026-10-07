@@ -8,15 +8,52 @@ export const maxDuration = 300;
 const dayMs = 24 * 60 * 60 * 1000;
 const cutoff = (days: number) => new Date(Date.now() - days * dayMs).toISOString();
 
-function recommendation(row: any) {
+const priceFloor = 1.99;
+const money = (value: number) => Math.round(value * 100) / 100;
+
+function titleSuggestions(row: any) {
+  const title = String(row.title || "");
+  const suggestions: string[] = [];
+  if (!/\b(NM|Near Mint|LP|Lightly Played|Light Play|MP|Moderately Played|HP|Heavily Played|DMG|Damaged)\b/i.test(title)) suggestions.push("Add the card condition to the title.");
+  if (!/\b\d{1,4}[a-z]?\s*\/\s*\d{1,4}[a-z]?\b|\b\d{1,4}[a-z]?\b/i.test(title)) suggestions.push("Add the collector/card number if it is available.");
+  if (row.game === "pokemon" && !/pok[eé]mon|pokemon/i.test(title)) suggestions.push("Add Pokémon to the title.");
+  if (row.game === "magic" && !/magic|mtg/i.test(title)) suggestions.push("Add Magic: The Gathering or MTG to the title.");
+  if (title.length > 75) suggestions.push("Shorten the title so the most important card details appear first.");
+  return suggestions;
+}
+
+function recommendedPrice(row: any, ageDays: number | null) {
+  const current = Number(row.price || 0);
+  if (!Number.isFinite(current) || current <= priceFloor) return { current, suggested: priceFloor, change: false, reason: "Your price is already at the $1.99 floor." };
+  const impressions = row.traffic_impressions == null ? null : Number(row.traffic_impressions);
+  const views = row.traffic_views == null ? null : Number(row.traffic_views);
+  const transactions = row.traffic_transactions == null ? null : Number(row.traffic_transactions);
+  if (transactions && transactions > 0) return { current, suggested: current, change: false, reason: "Recent sales activity supports keeping the current price." };
+  let reduction = ageDays != null && ageDays >= 365 ? 0.15 : ageDays != null && ageDays >= 180 ? 0.10 : 0.05;
+  if (impressions != null && impressions >= 10 && views === 0) reduction = Math.max(reduction, 0.10);
+  const suggested = money(Math.max(priceFloor, current * (1 - reduction)));
+  const trafficReason = impressions == null ? "Traffic has not been collected yet" : `${impressions.toLocaleString()} impressions, ${Number(views || 0).toLocaleString()} views, and no sales in the latest traffic period`;
+  return { current, suggested, change: suggested < current, reason: `${trafficReason}; test a ${Math.round(reduction * 100)}% reduction without going below $1.99.` };
+}
+
+function recommendation(row: any, ageDays: number | null) {
   const impressions = row.traffic_impressions;
   const views = row.traffic_views;
   const transactions = row.traffic_transactions;
-  if (impressions == null) return { key: "collect", label: "Collect traffic data" };
-  if (Number(impressions) < 10) return { key: "optimize", label: "Improve title and item specifics" };
-  if (Number(views) === 0) return { key: "promote", label: "Review photo or promote" };
-  if (Number(transactions) === 0) return { key: "price", label: "Review price" };
-  return { key: "keep", label: "Keep listing" };
+  const price = recommendedPrice(row, ageDays);
+  const title = titleSuggestions(row);
+  let summary = { key: "keep", label: "Keep listing" };
+  if (impressions == null) summary = { key: "collect", label: "Collect traffic data" };
+  else if (Number(impressions) < 10) summary = { key: "optimize", label: "Improve title and item specifics" };
+  else if (Number(views) === 0) summary = { key: "promote", label: "Review photo or promote" };
+  else if (Number(transactions) === 0) summary = { key: "price", label: "Review price" };
+  const changes = [
+    price.change ? `Test price: $${price.current.toFixed(2)} → $${price.suggested.toFixed(2)}` : `Price: keep at $${price.suggested.toFixed(2)}`,
+    ...title,
+    ...(impressions != null && Number(impressions) < 10 ? ["Review item specifics so eBay can place the listing in more searches."] : []),
+    ...(impressions != null && Number(impressions) >= 10 && Number(views || 0) === 0 ? ["Review the primary photo and consider a small promoted-listing test."] : []),
+  ];
+  return { ...summary, price, changes };
 }
 
 function bucketFilter(bucket: string) {
@@ -45,7 +82,7 @@ export async function GET(request: Request) {
       count("marketplace_listings", `&ebay_status=eq.active&ebay_started_at=lte.${encodeURIComponent(cutoff(365))}`),
     ]);
     return NextResponse.json({
-      ok: true, rows: (rows || []).map((row: any) => ({...row,ageDays:row.ebay_started_at?Math.floor((Date.now()-new Date(row.ebay_started_at).getTime())/dayMs):null,recommendation:recommendation(row)})),
+      ok: true, rows: (rows || []).map((row: any) => { const ageDays=row.ebay_started_at?Math.floor((Date.now()-new Date(row.ebay_started_at).getTime())/dayMs):null; return {...row,ageDays,recommendation:recommendation(row,ageDays)}; }),
       total, page, pageSize, counts:{age90,age180,age365}, bucket, game, reviewed,
     });
   } catch (error) {
