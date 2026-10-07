@@ -124,3 +124,8 @@ Supabase project are connected.
 - Recommendations now include title, item-specific, photo/promotion, and price guidance.
 - Price suggestions use listing age and stored 30-day traffic and never go below the $1.99 floor.
 - Suggestions remain review-only and never modify a live eBay listing automatically.
+
+## 1.11.6-automation-safety.26
+
+- Keeps Open eBay, Mark reviewed, and Recommend changes on one line at desktop widths.
+- Preserves responsive wrapping on smaller screens.
