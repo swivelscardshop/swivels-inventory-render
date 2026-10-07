@@ -136,3 +136,9 @@ Supabase project are connected.
 - Checks title coverage, card identity, set, number, condition, finish, language, image, SKU, quantity, price, and traffic freshness.
 - Adds a listing-quality score and an improved-title preview for every aged listing.
 - Keeps all recommendations review-only and preserves the $1.99 price floor.
+
+## 1.11.6-automation-safety.28
+
+- Fixed false missing-data warnings when Pokémon identity exists in the eBay title but its structured Supabase columns are blank.
+- Infers card name, number, set, finish, condition, and language from the current title before auditing it.
+- Keeps the current eBay title when no real title issue is detected instead of rebuilding it from incomplete fields.

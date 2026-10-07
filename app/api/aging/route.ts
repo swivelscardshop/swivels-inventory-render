@@ -18,7 +18,7 @@ function titleSuggestions(row: any) {
   if (!/\b\d{1,4}[a-z]?\s*\/\s*\d{1,4}[a-z]?\b|\b\d{1,4}[a-z]?\b/i.test(title)) suggestions.push("Add the collector/card number if it is available.");
   if (row.game === "pokemon" && !/pok[eé]mon|pokemon/i.test(title)) suggestions.push("Add Pokémon to the title.");
   if (row.game === "magic" && !/magic|mtg/i.test(title)) suggestions.push("Add Magic: The Gathering or MTG to the title.");
-  if (title.length > 75) suggestions.push("Shorten the title so the most important card details appear first.");
+  if (title.length > 80) suggestions.push("Shorten the title to 80 characters or fewer.");
   return suggestions;
 }
 
@@ -27,11 +27,32 @@ const contains = (title: string, value: unknown) => {
   return !expected || title.toLowerCase().includes(expected);
 };
 
+function inferredTitleData(row: any) {
+  const title = String(row.title || "").trim();
+  const numberMatch = title.match(/\b(\d{1,4}[a-z]?(?:\s*\/\s*\d{1,4}[a-z]?)?)\b/i);
+  const conditionMatch = title.match(/\b(Near Mint|Lightly Played|Light Play|Moderately Played|Heavily Played|Damaged|NM|LP|MP|HP|DMG)\b/i);
+  const finishMatch = title.match(/\b(Reverse Holo|Cosmos Holo|Holo Rare|Holo|Non.?Foil|Foil|Poke Ball|Pok[eé] Ball|Master Ball)\b/i);
+  const cardName = numberMatch ? title.slice(0, numberMatch.index).replace(/[|:\-]+$/g, "").trim() : "";
+  const afterNumber = numberMatch ? title.slice((numberMatch.index || 0) + numberMatch[0].length) : "";
+  const withoutFinish = afterNumber.replace(/^[\s|:\-]*(Reverse Holo|Cosmos Holo|Holo Rare|Holo|Non.?Foil|Foil|Poke Ball|Pok[eé] Ball|Master Ball)[\s|:\-]*/i, "");
+  const setName = withoutFinish.split(/\s+(?:Pok[eé]mon|Pokemon)\s+TCG\b|\s+Magic(?::?\s+The\s+Gathering)?\b|\s+MTG\b/i)[0]?.replace(/[|:\-]+$/g, "").trim() || "";
+  const foreignLanguage = title.match(/\b(Japanese|Korean|Chinese|French|German|Spanish|Italian|Portuguese)\b/i)?.[1] || "";
+  return {
+    card_name:String(row.card_name || cardName).trim(),
+    card_number:String(row.card_number || numberMatch?.[1] || "").replace(/\s/g, "").trim(),
+    set_name:String(row.set_name || setName).trim(),
+    condition_name:String(row.condition_name || conditionMatch?.[1] || "").trim(),
+    finish:String(row.finish || row.parallel_variety || finishMatch?.[1] || "").trim(),
+    language:String(row.language || foreignLanguage || "English").trim(),
+  };
+}
+
 function suggestedTitle(row: any) {
-  const condition = String(row.condition_name || "").trim();
-  const language = String(row.language || "").trim();
-  const finish = String(row.finish || row.parallel_variety || "").trim();
-  const parts = [row.card_name, row.card_number, row.set_name];
+  const identity = inferredTitleData(row);
+  const condition = identity.condition_name;
+  const language = identity.language;
+  const finish = identity.finish;
+  const parts = [identity.card_name, identity.card_number, identity.set_name];
   if (finish && !/^(non.?foil|normal|regular)$/i.test(finish)) parts.push(finish);
   if (language && !/^(english|en)$/i.test(language)) parts.push(language);
   parts.push(row.game === "magic" ? "Magic The Gathering MTG" : "Pokemon TCG", condition);
@@ -42,14 +63,13 @@ function suggestedTitle(row: any) {
 
 function listingAudit(row: any) {
   const title = String(row.title || "").trim();
+  const identity = inferredTitleData(row);
   const titleIssues: string[] = [];
   const dataIssues: string[] = [];
   let score = 100;
-  const expectedFields = [
-    ["card_name", "Card name"], ["set_name", "Set name"], ["card_number", "Card number"],
-    ["condition_name", "Condition"], ["language", "Language"],
-  ] as const;
-  for (const [key, label] of expectedFields) if (!String(row[key] || "").trim()) { dataIssues.push(`${label} is missing from the stored listing data.`); score -= key === "card_name" || key === "set_name" ? 15 : 8; }
+  if (!identity.card_name) { titleIssues.push("Card name could not be identified in the title."); score -= 15; }
+  if (!identity.card_number) { titleIssues.push("Add the collector/card number if this card has one."); score -= 8; }
+  if (!identity.condition_name) { titleIssues.push("Add the card condition to the title."); score -= 8; }
   if (!row.ebay_sku) { dataIssues.push("Custom SKU is missing; confirm the card's pull location."); score -= 15; }
   if (!row.image_url) { dataIssues.push("Primary image is missing from the imported listing data."); score -= 12; }
   if (!Number(row.ebay_quantity)) { dataIssues.push("Active listing has no available quantity."); score -= 15; }
@@ -58,11 +78,11 @@ function listingAudit(row: any) {
     [row.card_name, "card name"], [row.set_name, "set name"], [row.card_number, "card number"],
   ];
   for (const [value, label] of titleChecks) if (value && !contains(title, value)) { titleIssues.push(`Add the stored ${label}: ${value}.`); score -= 10; }
-  const condition = String(row.condition_name || "").trim();
+  const condition = identity.condition_name;
   if (condition && !contains(title, condition) && !/\b(NM|LP|MP|HP|DMG)\b/i.test(title)) { titleIssues.push(`Add the condition: ${condition}.`); score -= 8; }
-  const language = String(row.language || "").trim();
+  const language = identity.language;
   if (language && !/^(english|en)$/i.test(language) && !contains(title, language)) { titleIssues.push(`Add the language: ${language}.`); score -= 8; }
-  const finish = String(row.finish || row.parallel_variety || "").trim();
+  const finish = identity.finish;
   if (finish && !/^(non.?foil|normal|regular)$/i.test(finish) && !contains(title, finish)) { titleIssues.push(`Add the finish/variant: ${finish}.`); score -= 8; }
   if (title.length > 80) { titleIssues.push(`Shorten the title from ${title.length} to 80 characters or fewer.`); score -= 10; }
   else if (title.length < 35) { titleIssues.push("Use more of the title to include searchable card details."); score -= 5; }
@@ -74,7 +94,7 @@ function listingAudit(row: any) {
   else if (trafficAge > 7) dataIssues.push(`Traffic data is ${trafficAge} days old; update it before making a pricing decision.`);
   const priority = [...dataIssues, ...titleIssues];
   if (!priority.length) priority.push("Stored listing data and title structure look complete.");
-  return { score: Math.max(0, score), suggestedTitle:suggestedTitle(row), titleIssues, dataIssues, priority };
+  return { score: Math.max(0, score), suggestedTitle:titleIssues.length?suggestedTitle(row):title, titleChanged:titleIssues.length>0, titleIssues, dataIssues, priority, identified:identity };
 }
 
 function recommendedPrice(row: any, ageDays: number | null) {
