@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db, dbAll } from "@/lib/supabase";
 import { coalesceManaPoolInventory, getManaPoolOrder, getManaPoolOrders, getManaPoolSinglePricesFor, lowestManaPoolPriceForFinish, manaPoolConfigured, manaPoolPrice, manaPoolSyncEnabled, manaPoolVariantPriceKey, setManaPoolInventory } from "@/lib/manapool";
-import { accessToken, endListing, getActiveListings, reviseListingQuantity } from "@/lib/ebay";
+import { endListing, reviseListingQuantity } from "@/lib/ebay";
 import { chooseScryfallCandidate, findScryfallCandidates, manaPoolVariant, titleIdentity } from "@/lib/scryfall";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -118,19 +118,15 @@ export async function POST(request: Request) {
     if (mode === "combine-conflict") {
       const ids=Array.isArray(body.listing_ids)?[...new Set(body.listing_ids.map(String))].slice(0,20):[];
       if(ids.length<2||ids.some((id:any)=>!/^[0-9a-f-]{36}$/i.test(id))) throw new Error("Conflict selection could not be verified");
-      const records=await db(`marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,scryfall_id,language_id,finish_id,condition_id&id=in.(${ids.join(",")})&game=eq.magic&ebay_status=eq.active`);
+      const records=await db(`marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,ebay_quantity,ebay_started_at,scryfall_id,language_id,finish_id,condition_id&id=in.(${ids.join(",")})&game=eq.magic&ebay_status=eq.active`);
       if(records?.length!==ids.length||new Set(records.map((x:any)=>manaPoolVariantPriceKey(x))).size!==1) throw new Error("These listings no longer share the same Mana Pool mapping");
-      const token=await accessToken();
-      const ebayIds=new Set(records.map((x:any)=>String(x.ebay_listing_id)));
-      const live=(await getActiveListings(token)).filter((x:any)=>ebayIds.has(String(x.ebay_listing_id)));
-      if(live.length!==records.length) throw new Error("One or more eBay listings are no longer active. Refresh and review again.");
-      live.sort((a:any,b:any)=>(Date.parse(b.started_at||"")||0)-(Date.parse(a.started_at||"")||0)||Number(b.ebay_listing_id)-Number(a.ebay_listing_id));
+      const live=[...records].sort((a:any,b:any)=>(Date.parse(b.ebay_started_at||"")||0)-(Date.parse(a.ebay_started_at||"")||0)||Number(b.ebay_listing_id)-Number(a.ebay_listing_id));
       const survivor=live[0],total=live.reduce((sum:number,x:any)=>sum+Number(x.ebay_quantity||0),0);
       // Preserve every listing's primary eBay SKU before ending anything.
       for(const listing of live){
         const sku=String(listing.ebay_sku||"").trim();
         if(!sku)throw new Error(`Cannot combine ${listing.title}: its eBay listing has no custom SKU.`);
-        const record=records.find((x:any)=>String(x.ebay_listing_id)===String(listing.ebay_listing_id));
+        const record=listing;
         const stored=await db(`physical_skus?select=id,listing_id&sku=eq.${encodeURIComponent(sku)}&limit=1`);
         if(!stored?.length) await db("physical_skus",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({listing_id:record.id,sku,location_label:sku,status:"available",source:"ebay",updated_at:new Date().toISOString()})});
         else if(String(stored[0].listing_id)!==String(record.id))throw new Error(`SKU ${sku} is attached to a different Supabase listing. Resolve it before combining.`);

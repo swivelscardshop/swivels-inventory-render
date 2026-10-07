@@ -110,3 +110,10 @@ Supabase project are connected.
 - CSV download stays locked until all physical SKUs have been saved and verified in `pending_skus`.
 - Pending SKU attachment verifies the final listing relationship before removing its queue record.
 - A SKU already attached to a different listing is never silently moved or reported as saved.
+
+## 1.11.6-automation-safety.24
+
+- Fixed Magic `Combine as same card` appearing to do nothing while a full eBay catalog scan ran.
+- The combine action now uses the synchronized records for only the selected listings and proceeds directly to eBay quantity/end-listing calls.
+- Added a persistent progress, completion, or error status directly above the Mana Pool conflict list.
+- Render HTML/error responses are surfaced instead of being swallowed as an unreadable JSON failure.

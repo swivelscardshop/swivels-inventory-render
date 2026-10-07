@@ -902,6 +902,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
   const [panelData, setPanelData] = useState<any>(data);
   const [mapResult, setMapResult] = useState<any>(null);
   const [webhooks, setWebhooks] = useState<any>(null);
+  const [combineStatus, setCombineStatus] = useState<string>("");
   useEffect(()=>setPanelData(data),[data]);
   useEffect(()=>{ fetch("/api/webhooks/setup",{cache:"no-store"}).then(async r=>{const b=await r.json();if(r.ok)setWebhooks(b);}).catch(()=>{}); },[]);
   const run = async (mode:"preview"|"sync") => {
@@ -963,11 +964,14 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
   const combineConflict = async (conflict:any) => {
     if(!(await confirmAction({title:"Combine these eBay listings?",message:`These ${conflict.listings.length} listings share the same reviewed Mana Pool printing, condition, language, and finish. The newest eBay listing will remain, quantities will be added, and every physical SKU will be moved to it in Supabase.`,confirmLabel:"Combine listings",tone:"danger"}))) return;
     setWorking(true);
+    setCombineStatus(`Combining ${conflict.listings.length} listings… Updating eBay and preserving every Supabase SKU.`);
     try {
       const r=await fetch("/api/manapool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"combine-conflict",listing_ids:conflict.listings.map((x:any)=>x.id)})});
-      const b:any=await r.json(); if(!r.ok) throw new Error(b.error||"Could not combine these listings");
-      setPanelData(b.overview); setPreview(null); notify(`Combined the listings at quantity ${b.quantity}; all Supabase locations were preserved.`);
-    } catch(e){notify(e instanceof Error?e.message:"Could not combine these listings");} finally{setWorking(false);}
+      const text=await r.text();let b:any;
+      try{b=text?JSON.parse(text):{};}catch{throw new Error(`Combine failed with HTTP ${r.status}. Check the Render logs for the Mana Pool request.`);}
+      if(!r.ok) throw new Error(b.error||"Could not combine these listings");
+      setPanelData(b.overview); setPreview(null); setCombineStatus(`Combined successfully. Quantity ${b.quantity}; ${b.ended} older listing${b.ended===1?"":"s"} ended; every SKU preserved.`); notify(`Combined the listings at quantity ${b.quantity}; all Supabase locations were preserved.`);
+    } catch(e){const message=e instanceof Error?e.message:"Could not combine these listings";setCombineStatus(`Combine stopped: ${message}`);notify(message);} finally{setWorking(false);}
   };
   const downloadUnmatchedLog = () => {
     const rows = panelData?.unresolvedDetails || [];
@@ -989,6 +993,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
       </div>
       {!!panelData?.conflicts?.length && <section className="panel">
         <Title k="REVIEW REQUIRED" t={`${panelData.conflicts.length} Mana Pool mapping conflict${panelData.conflicts.length===1?"":"s"}`} />
+        {!!combineStatus&&<div className={`combine-status ${working?"working":combineStatus.startsWith("Combined successfully")?"complete":"warning"}`}><div><b>{working?"Combine in progress":combineStatus.startsWith("Combined successfully")?"Combine completed":"Combine needs attention"}</b><small>{combineStatus}</small></div>{working&&<i/>}</div>}
         <div className="warning"><AlertTriangle/><div><b>Live inventory sync is blocked for these variants</b><p>Each group points to the same Scryfall printing, condition, language, and finish. Review the titles and Supabase pull locations before combining anything.</p></div></div>
         <div className="mapping-review">
           {panelData.conflicts.map((conflict:any)=><article className="mapping-card" key={conflict.key}>
@@ -997,7 +1002,7 @@ function ManaPoolPanel({ data, loading, notify, confirmAction }: { data:any; loa
               <div><b>{listing.title}</b><small>eBay #{listing.ebay_listing_id} · Primary SKU {listing.ebay_sku||"—"} · Qty {listing.ebay_quantity}</small><small>Supabase locations: {listing.locations?.length?listing.locations.map((x:any)=>`${x.sku}${x.status!=="available"?` (${x.status})`:""}`).join(", "):"No location stored"}</small></div>
               <button className="secondary" disabled={working} onClick={()=>reviewConflict(listing)}>Review mapping</button>
             </div>)}
-            <div className="modal-actions"><button className="primary" disabled={working} onClick={()=>combineConflict(conflict)}>Combine as same card</button></div>
+            <div className="modal-actions"><button className="primary" disabled={working} onClick={()=>combineConflict(conflict)}>{working?"Combining…":"Combine as same card"}</button></div>
           </article>)}
         </div>
       </section>}
