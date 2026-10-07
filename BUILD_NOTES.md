@@ -129,3 +129,10 @@ Supabase project are connected.
 
 - Keeps Open eBay, Mark reviewed, and Recommend changes on one line at desktop widths.
 - Preserves responsive wrapping on smaller screens.
+
+## 1.11.6-automation-safety.27
+
+- Expanded Aging Report recommendations into a full stored-listing audit.
+- Checks title coverage, card identity, set, number, condition, finish, language, image, SKU, quantity, price, and traffic freshness.
+- Adds a listing-quality score and an improved-title preview for every aged listing.
+- Keeps all recommendations review-only and preserves the $1.99 price floor.

@@ -22,6 +22,61 @@ function titleSuggestions(row: any) {
   return suggestions;
 }
 
+const contains = (title: string, value: unknown) => {
+  const expected = String(value || "").trim().toLowerCase();
+  return !expected || title.toLowerCase().includes(expected);
+};
+
+function suggestedTitle(row: any) {
+  const condition = String(row.condition_name || "").trim();
+  const language = String(row.language || "").trim();
+  const finish = String(row.finish || row.parallel_variety || "").trim();
+  const parts = [row.card_name, row.card_number, row.set_name];
+  if (finish && !/^(non.?foil|normal|regular)$/i.test(finish)) parts.push(finish);
+  if (language && !/^(english|en)$/i.test(language)) parts.push(language);
+  parts.push(row.game === "magic" ? "Magic The Gathering MTG" : "Pokemon TCG", condition);
+  const built = parts.map((x) => String(x || "").trim()).filter(Boolean).join(" ").replace(/\s+/g, " ");
+  if (!built) return String(row.title || "");
+  return built.length <= 80 ? built : built.slice(0, 80).replace(/\s+\S*$/, "").trim();
+}
+
+function listingAudit(row: any) {
+  const title = String(row.title || "").trim();
+  const titleIssues: string[] = [];
+  const dataIssues: string[] = [];
+  let score = 100;
+  const expectedFields = [
+    ["card_name", "Card name"], ["set_name", "Set name"], ["card_number", "Card number"],
+    ["condition_name", "Condition"], ["language", "Language"],
+  ] as const;
+  for (const [key, label] of expectedFields) if (!String(row[key] || "").trim()) { dataIssues.push(`${label} is missing from the stored listing data.`); score -= key === "card_name" || key === "set_name" ? 15 : 8; }
+  if (!row.ebay_sku) { dataIssues.push("Custom SKU is missing; confirm the card's pull location."); score -= 15; }
+  if (!row.image_url) { dataIssues.push("Primary image is missing from the imported listing data."); score -= 12; }
+  if (!Number(row.ebay_quantity)) { dataIssues.push("Active listing has no available quantity."); score -= 15; }
+  if (!Number.isFinite(Number(row.price)) || Number(row.price) <= 0) { dataIssues.push("Price is missing or invalid."); score -= 15; }
+  const titleChecks = [
+    [row.card_name, "card name"], [row.set_name, "set name"], [row.card_number, "card number"],
+  ];
+  for (const [value, label] of titleChecks) if (value && !contains(title, value)) { titleIssues.push(`Add the stored ${label}: ${value}.`); score -= 10; }
+  const condition = String(row.condition_name || "").trim();
+  if (condition && !contains(title, condition) && !/\b(NM|LP|MP|HP|DMG)\b/i.test(title)) { titleIssues.push(`Add the condition: ${condition}.`); score -= 8; }
+  const language = String(row.language || "").trim();
+  if (language && !/^(english|en)$/i.test(language) && !contains(title, language)) { titleIssues.push(`Add the language: ${language}.`); score -= 8; }
+  const finish = String(row.finish || row.parallel_variety || "").trim();
+  if (finish && !/^(non.?foil|normal|regular)$/i.test(finish) && !contains(title, finish)) { titleIssues.push(`Add the finish/variant: ${finish}.`); score -= 8; }
+  if (title.length > 80) { titleIssues.push(`Shorten the title from ${title.length} to 80 characters or fewer.`); score -= 10; }
+  else if (title.length < 35) { titleIssues.push("Use more of the title to include searchable card details."); score -= 5; }
+  if (/\s{2,}|[|\-:]{3,}/.test(title)) { titleIssues.push("Clean up repeated spaces or punctuation in the title."); score -= 4; }
+  const keyword = row.game === "magic" ? /\b(MTG|Magic(?: The Gathering)?)\b/gi : /\bPok[eé]mon\b|\bPokemon\b/gi;
+  if ((title.match(keyword) || []).length > 2) { titleIssues.push("Remove repeated game keywords and use that space for card details."); score -= 4; }
+  const trafficAge = row.traffic_updated_at ? Math.floor((Date.now() - new Date(row.traffic_updated_at).getTime()) / dayMs) : null;
+  if (trafficAge == null) dataIssues.push("30-day traffic has not been collected.");
+  else if (trafficAge > 7) dataIssues.push(`Traffic data is ${trafficAge} days old; update it before making a pricing decision.`);
+  const priority = [...dataIssues, ...titleIssues];
+  if (!priority.length) priority.push("Stored listing data and title structure look complete.");
+  return { score: Math.max(0, score), suggestedTitle:suggestedTitle(row), titleIssues, dataIssues, priority };
+}
+
 function recommendedPrice(row: any, ageDays: number | null) {
   const current = Number(row.price || 0);
   if (!Number.isFinite(current) || current <= priceFloor) return { current, suggested: priceFloor, change: false, reason: "Your price is already at the $1.99 floor." };
@@ -47,13 +102,14 @@ function recommendation(row: any, ageDays: number | null) {
   else if (Number(impressions) < 10) summary = { key: "optimize", label: "Improve title and item specifics" };
   else if (Number(views) === 0) summary = { key: "promote", label: "Review photo or promote" };
   else if (Number(transactions) === 0) summary = { key: "price", label: "Review price" };
+  const audit = listingAudit(row);
   const changes = [
     price.change ? `Test price: $${price.current.toFixed(2)} → $${price.suggested.toFixed(2)}` : `Price: keep at $${price.suggested.toFixed(2)}`,
     ...title,
     ...(impressions != null && Number(impressions) < 10 ? ["Review item specifics so eBay can place the listing in more searches."] : []),
     ...(impressions != null && Number(impressions) >= 10 && Number(views || 0) === 0 ? ["Review the primary photo and consider a small promoted-listing test."] : []),
   ];
-  return { ...summary, price, changes };
+  return { ...summary, price, changes, audit };
 }
 
 function bucketFilter(bucket: string) {
@@ -75,7 +131,7 @@ export async function GET(request: Request) {
     const reviewedFilter = reviewed === "reviewed" ? "&aging_reviewed_at=not.is.null" : reviewed === "all" ? "" : "&aging_reviewed_at=is.null";
     const filters = `&ebay_status=eq.active${bucketFilter(bucket)}${gameFilter}${reviewedFilter}`;
     const [rows, total, age90, age180, age365] = await Promise.all([
-      db(`marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,game,price,ebay_quantity,ebay_started_at,aging_reviewed_at,aging_action,traffic_impressions,traffic_views,traffic_transactions,traffic_ctr,traffic_conversion,traffic_updated_at${filters}&order=ebay_started_at.asc&limit=${pageSize}&offset=${(page - 1) * pageSize}`),
+      db(`marketplace_listings?select=id,ebay_listing_id,ebay_sku,title,game,price,ebay_quantity,image_url,card_name,card_number,set_name,finish,language,condition_name,parallel_variety,ebay_started_at,aging_reviewed_at,aging_action,traffic_impressions,traffic_views,traffic_transactions,traffic_ctr,traffic_conversion,traffic_updated_at${filters}&order=ebay_started_at.asc&limit=${pageSize}&offset=${(page - 1) * pageSize}`),
       count("marketplace_listings", filters),
       count("marketplace_listings", `&ebay_status=eq.active&ebay_started_at=lte.${encodeURIComponent(cutoff(90))}&ebay_started_at=gt.${encodeURIComponent(cutoff(180))}`),
       count("marketplace_listings", `&ebay_status=eq.active&ebay_started_at=lte.${encodeURIComponent(cutoff(180))}&ebay_started_at=gt.${encodeURIComponent(cutoff(365))}`),
