@@ -1,7 +1,9 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
+  Archive,
   Boxes,
   Check,
   ClipboardCheck,
@@ -33,6 +35,7 @@ type View =
   | "sync-control"
   | "aging"
   | "exceptions"
+  | "operations"
   | "settings";
   
 type Status = {
@@ -79,6 +82,7 @@ const nav = [
   ["sync-control", "Sync Control", RefreshCw],
   ["aging", "Aging Report", PackageCheck],
   ["exceptions", "Exception Center", ShieldAlert],
+  ["operations", "Operations Center", Activity],
   ["settings", "Settings", Settings],
 ] as const;
 export default function Home() {
@@ -101,6 +105,7 @@ export default function Home() {
     [syncControl, setSyncControl] = useState<any>(null),
     [aging, setAging] = useState<any>(null),
     [exceptions, setExceptions] = useState<any>(null),
+    [operations, setOperations] = useState<any>(null),
     [q, setQ] = useState(""),
     [page, setPage] = useState(1),
     [total, setTotal] = useState(0),
@@ -228,6 +233,22 @@ export default function Home() {
   useEffect(() => {
     if (view === "exceptions" && status.ready) loadExceptions();
   }, [view, status.ready, loadExceptions]);
+  const loadOperations=useCallback(async()=>{
+    setLoading(true);
+    try{
+      const response=await fetch("/api/operations",{cache:"no-store"});
+      const body:any=await response.json();
+      if(!response.ok)throw new Error(body.error||"Operations Center failed");
+      setOperations(body);
+    }catch(e){setMessage(e instanceof Error?e.message:"Operations Center failed");}
+    finally{setLoading(false);}
+  },[]);
+  useEffect(()=>{
+    if(view!=="operations"||!status.ready)return;
+    loadOperations();
+    const timer=window.setInterval(()=>{if(document.visibilityState==="visible")loadOperations();},30000);
+    return()=>window.clearInterval(timer);
+  },[view,status.ready,loadOperations]);
   const loadSyncControl = useCallback(async () => {
     try {
       const response = await fetch("/api/sync-control", { cache: "no-store" });
@@ -393,7 +414,7 @@ export default function Home() {
               loading={loading}
             />
           )}{" "}
-          {view === "bin-audit" && <BinAudit data={binAudit} loading={loading} reload={()=>setBinAudit(null)} />} {" "}
+          {view === "bin-audit" && <BinAudit data={binAudit} loading={loading} reload={()=>setBinAudit(null)} notify={setMessage} />} {" "}
           {view === "orders" && <Orders rows={orders} loading={loading} reload={loadOrders} notify={setMessage} confirmAction={confirmAction} />}{" "}
           {view === "duplicates" && (
             <Duplicates
@@ -417,6 +438,7 @@ export default function Home() {
           {view === "sync-control" && <SyncControl data={syncControl} reload={loadSyncControl} notify={setMessage} go={setView} confirmAction={confirmAction} />}{" "}
           {view === "aging" && <AgingReport data={aging} setData={setAging} loading={loading} load={loadAging} notify={setMessage} />}{" "}
           {view === "exceptions" && <ExceptionCenter data={exceptions} loading={loading} reload={loadExceptions} notify={setMessage} go={setView} confirmAction={confirmAction} />}{" "}
+          {view === "operations" && <OperationsCenter data={operations} loading={loading} reload={loadOperations} notify={setMessage} confirmAction={confirmAction} />}{" "}
           {view === "settings" && <Connections s={status} />}
         </div>
       </main>
@@ -732,11 +754,14 @@ function Inventory({
     </div>
   );
 }
-function BinAudit({data,loading,reload}:{data:any;loading:boolean;reload:()=>void}){
-  const [selectedBin,setSelectedBin]=useState("all"),[search,setSearch]=useState(""),[checked,setChecked]=useState<Set<string>>(new Set());
+function BinAudit({data,loading,reload,notify}:{data:any;loading:boolean;reload:()=>void;notify:(v:string)=>void}){
+  const [selectedBin,setSelectedBin]=useState("all"),[search,setSearch]=useState(""),[checked,setChecked]=useState<Set<string>>(new Set()),[working,setWorking]=useState<string|null>(null);
+  useEffect(()=>{if(data)setChecked(new Set((data.groups||[]).flatMap((group:any)=>group.cards||[]).filter((card:any)=>card.audit?.status==="verified").map((card:any)=>card.id)));},[data]);
   const groups=(data?.groups||[]).map((group:any)=>({...group,cards:(group.cards||[]).filter((card:any)=>!search||`${card.sku} ${card.title} ${card.ebayListingId||""}`.toLowerCase().includes(search.toLowerCase()))})).filter((group:any)=>(selectedBin==="all"||group.bin===selectedBin)&&group.cards.length);
   const visible=groups.reduce((sum:number,group:any)=>sum+group.cards.length,0),verified=groups.reduce((sum:number,group:any)=>sum+group.cards.filter((card:any)=>checked.has(card.id)).length,0);
-  const toggle=(id:string)=>setChecked(current=>{const next=new Set(current);next.has(id)?next.delete(id):next.add(id);return next;});
+  const act=async(action:string,card:any,extra:any={})=>{setWorking(card.id);try{const response=await fetch("/api/bin-audit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,id:card.id,...extra})});const body:any=await response.json();if(!response.ok)throw new Error(body.error||"Bin update failed");notify(action==="move"?`${card.sku} moved to ${extra.location}.`:action==="missing"?`${card.sku} marked missing.`:`${card.sku} verified.`);reload();}catch(e){notify(e instanceof Error?e.message:"Bin update failed");}finally{setWorking(null);}};
+  const toggle=(card:any)=>{if(!checked.has(card.id))void act("verify",card);};
+  const move=(card:any)=>{const location=window.prompt(`Move ${card.sku} to which SKU/location?`,card.sku);if(location&&location!==card.sku)void act("move",card,{location});};
   return <div className="stack bin-audit-page">
     <Intro title="Bin Reconciliation" text="Check every physical card in SKU order. Select one bin for a focused audit, or print the complete grouped checklist." action={<button className="secondary bin-print" onClick={()=>window.print()}><Printer/>Print checklist</button>}/>
     <div className="metrics bin-audit-metrics"><Metric n={data?.bins||0} t="Bins" d="Detected SKU groups"/><Metric n={data?.total||0} t="Physical cards" d="Available and allocated"/><Metric n={visible} t="Showing" d="Current filter"/><Metric n={`${verified}/${visible}`} t="Checked" d="This browser session"/></div>
@@ -750,8 +775,8 @@ function BinAudit({data,loading,reload}:{data:any;loading:boolean;reload:()=>voi
     </section>
     {loading&&!data?<Empty text="Loading physical SKU locations…"/>:groups.length?groups.map((group:any)=><section className="panel bin-audit-group" key={group.bin}>
       <div className="title"><div><small>BIN / TAB</small><h3>{group.bin}</h3></div><span className="count">{group.cards.length} card{group.cards.length===1?"":"s"}</span></div>
-      <div className="bin-audit-table"><table><thead><tr><th>Check</th><th>Position</th><th>Full SKU</th><th>Card</th><th>Set / condition</th><th>Game</th><th>Status</th><th>eBay listing</th></tr></thead><tbody>{group.cards.map((card:any)=><tr className={checked.has(card.id)?"audited":""} key={card.id}>
-        <td><input className="audit-check" type="checkbox" checked={checked.has(card.id)} onChange={()=>toggle(card.id)} aria-label={`Verify ${card.sku}`}/></td><td className="mono"><b>{card.positionLabel}</b></td><td className="mono">{card.sku}</td><td><b>{card.title}</b></td><td>{card.setName||"—"}<small>{card.condition||"Condition unavailable"}</small></td><td>{card.game}</td><td><span className={`pill ${card.status==="available"?"matched":"missing"}`}>{card.status}</span>{card.sourceOrderId&&<small>Order {card.sourceOrderId}</small>}</td><td className="mono">{card.ebayListingId||"—"}</td>
+      <div className="bin-audit-table"><table><thead><tr><th>Check</th><th>Position</th><th>Full SKU</th><th>Card</th><th>Set / condition</th><th>Game</th><th>Status</th><th>eBay listing</th><th>Actions</th></tr></thead><tbody>{group.cards.map((card:any)=><tr className={checked.has(card.id)?"audited":""} key={card.id}>
+        <td><input className="audit-check" type="checkbox" checked={checked.has(card.id)} disabled={working===card.id||checked.has(card.id)} onChange={()=>toggle(card)} aria-label={`Verify ${card.sku}`}/></td><td className="mono"><b>{card.positionLabel}</b></td><td className="mono">{card.sku}</td><td><b>{card.title}</b></td><td>{card.setName||"—"}<small>{card.condition||"Condition unavailable"}</small></td><td>{card.game}</td><td><span className={`pill ${card.audit?.status==="missing"?"missing":card.status==="available"?"matched":"missing"}`}>{card.audit?.status||card.status}</span>{card.sourceOrderId&&<small>Order {card.sourceOrderId}</small>}</td><td className="mono">{card.ebayListingId||"—"}</td><td><div className="toolbar"><button className="secondary" disabled={working===card.id} onClick={()=>act("missing",card)}>Missing</button><button className="secondary" disabled={working===card.id} onClick={()=>move(card)}>Move</button></div></td>
       </tr>)}</tbody></table></div>
     </section>):<Empty text="No physical SKU locations match this bin or search."/>}
   </div>;
@@ -1646,6 +1671,47 @@ function ExceptionCenter({ data, loading, reload, notify, go, confirmAction }: {
       </section>
     </div>
   );
+}
+function OperationsCenter({data,loading,reload,notify,confirmAction}:{data:any;loading:boolean;reload:()=>Promise<void>;notify:(v:string)=>void;confirmAction:ConfirmAction}){
+  const [working,setWorking]=useState(false);
+  const reconcile=async()=>{
+    if(!(await confirmAction({title:"Run full business reconciliation?",message:"This refreshes eBay listings and orders, attaches scheduled CSV SKUs, updates Mana Pool, and records a reconciliation report.",confirmLabel:"Run reconciliation"})))return;
+    setWorking(true);
+    try{const response=await fetch("/api/operations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"reconcile"})});const body:any=await response.json();if(!response.ok)throw new Error(body.error||"Reconciliation failed");notify(body.message);await reload();}catch(e){notify(e instanceof Error?e.message:"Reconciliation failed");}finally{setWorking(false);}
+  };
+  const protect=async()=>{
+    if(!(await confirmAction({title:"Apply oversell protection?",message:"For every open missing-SKU exception, eBay quantity will be reduced to the number of stored sellable locations. Listings with zero locations will be ended.",confirmLabel:"Protect inventory",tone:"danger"})))return;
+    setWorking(true);try{const response=await fetch("/api/operations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"oversell-protection"})});const body:any=await response.json();if(!response.ok)throw new Error(body.error||"Oversell protection failed");notify(body.message);await reload();}catch(e){notify(e instanceof Error?e.message:"Oversell protection failed");}finally{setWorking(false);}
+  };
+  const h=data?.health||{},m=data?.metrics||{};
+  const stamp=(value:any)=>value?new Date(value).toLocaleString():"Never";
+  const healthLabel=h.workerOnline&&h.failedEvents===0?"Healthy":h.workerOnline?"Action needed":"Delayed";
+  return <div className="stack">
+    <Intro title="Business Operations" text="Monitor background automation, CSV SKU batches, inventory history, reconciliation, performance, and backups from one page." action={<div className="toolbar"><a className="secondary" href="/api/backup"><Archive/>Download backup</a><button className="secondary" disabled={loading||working||!h.openIssues} onClick={protect}><ShieldAlert/>Protect inventory</button><button className="primary" disabled={loading||working} onClick={reconcile}><RefreshCw className={working?"spin":""}/>{working?"Reconciling…":"Run reconciliation"}</button></div>}/>
+    <div className="metrics">
+      <Metric n={healthLabel} t="Automation" d={h.workerOnline?"Worker responding":"Worker heartbeat delayed"}/>
+      <Metric n={h.openIssues||0} t="Open exceptions" d="Inventory and sync review"/>
+      <Metric n={data?.batches?.filter((x:any)=>x.status==="pending").length||0} t="Pending CSV groups" d="Waiting for eBay activation"/>
+      <Metric n={h.failedEvents||0} t="Failed events" d="Webhook or worker retries"/>
+    </div>
+    <section className="panel"><Title k="AUTOMATION HEALTH" t="Backend activity"/><div className="health-grid">
+      <div><small>WORKER</small><b>{healthLabel}</b><em>{h.workerStatus||"No status"} · heartbeat {stamp(h.workerHeartbeat)}</em></div>
+      <div><small>EBAY WEBHOOK</small><b>{stamp(h.lastEbayWebhookAt)}</b><em>{h.lastEbayWebhookResult||"No result recorded"}</em></div>
+      <div><small>MANA POOL WEBHOOK</small><b>{stamp(h.lastManaPoolWebhookAt)}</b><em>{h.lastManaPoolWebhookResult||"No result recorded"}</em></div>
+      <div><small>FALLBACK RECOVERY</small><b>{stamp(h.lastRecoveryAt)}</b><em>{h.lastRecoveryResult||"No recovery recorded"}</em></div>
+    </div></section>
+    <section className="panel"><Title k="BUSINESS METRICS" t="Current inventory performance"/><div className="metrics">
+      <Metric n={m.activeListings||0} t="Active listings" d={`${m.pokemon||0} Pokémon · ${m.magic||0} Magic`}/>
+      <Metric n={m.physicalUnits||0} t="Listed units" d="Combined eBay quantities"/>
+      <Metric n={`$${Number(m.inventoryValue||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`} t="Listed value" d="Price multiplied by quantity"/>
+      <Metric n={m.soldUnits30Days||0} t="30-day units" d="Non-refunded order quantities"/>
+      <Metric n={m.olderThan180Days||0} t="Older than 180 days" d="Review in Aging Report"/>
+      <Metric n={m.zeroImpressions||0} t="Zero impressions" d="Listing optimization candidates"/>
+    </div></section>
+    <section className="panel"><Title k="CSV BATCH HISTORY" t={`${data?.batches?.length||0} recent SKU groups`}/>{data?.batches?.length?<div className="mapping-review">{data.batches.map((batch:any)=><details className="mapping-card" key={batch.id}><summary><b>{batch.primarySku||"Unknown primary SKU"}</b><small>{batch.status.toUpperCase()} · {batch.storedSkus}/{batch.expectedQuantity} SKUs · {stamp(batch.createdAt)}</small></summary><div className="mapping-options"><span><b>Physical locations</b><small>{batch.skus.join(", ")}</small></span><span><b>Attachment</b><small>{batch.listingId?`Linked to listing record ${batch.listingId}`:"Waiting for scheduled listing to become active"}</small></span></div>{batch.error&&<p className="bodycopy">{batch.error}</p>}</details>)}</div>:<Empty text="No CSV SKU batches have been recorded yet."/>}</section>
+    <section className="panel"><Title k="RECONCILIATION REPORTS" t="Latest completed checks"/>{data?.runs?.length?<div className="exception-list">{data.runs.map((run:any)=><article className={`exception-row ${run.status==="failed"?"error":""}`} key={run.id}><ClipboardCheck/><div><span>{run.status}</span><b>{stamp(run.started_at)}</b><p>{run.status==="completed"?`${run.listings_count||0} listings · ${run.sku_count||0} SKUs · ${run.issues_count||0} exceptions`:run.error_message||"Reconciliation is running"}</p></div></article>)}</div>:<Empty text="No reconciliation reports have been recorded yet."/>}</section>
+    <section className="panel"><Title k="INVENTORY LEDGER" t="Recent SKU activity"/>{data?.ledger?.length?<div className="exception-list">{data.ledger.slice(0,50).map((event:any)=><article className="exception-row" key={event.id}><PackageCheck/><div><span>{String(event.event_type||"").replaceAll("_"," ")}</span><b>{event.sku||"Listing event"}</b><p>{event.source}{event.quantity_delta?` · quantity ${event.quantity_delta>0?"+":""}${event.quantity_delta}`:""}</p><small>{stamp(event.created_at)}</small></div></article>)}</div>:<Empty text="The ledger will populate as CSV SKUs are saved, attached, allocated, sold, restored, or removed."/>}</section>
+  </div>;
 }
 function Connections({ s }: { s: Status }) {
   return (

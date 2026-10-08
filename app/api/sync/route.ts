@@ -3,6 +3,7 @@ import { accessToken, getActiveListings, getOpenOrders, getOrder } from "@/lib/e
 import { db, dbAll } from "@/lib/supabase";
 import { getManaPoolSinglePricesFor, lowestManaPoolPriceForFinish, manaPoolPrice, manaPoolSyncEnabled, manaPoolVariantPriceKey, setManaPoolInventory } from "@/lib/manapool";
 import { chooseScryfallCandidate, findScryfallCandidates, manaPoolVariant } from "@/lib/scryfall";
+import { recordInventoryEvents } from "@/lib/inventory-events";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -145,6 +146,7 @@ export async function POST() {
     const existingBySku=new Map(existingTargetSkus.map((row:any)=>[String(row.sku),String(row.listing_id)]));
     const newAttachments=[...attachmentTargets.values()].filter((row)=>!existingBySku.has(row.sku)).map((row)=>({listing_id:row.listingId,sku:row.sku,location_label:row.locationLabel,status:"available",source:"csv_intake",updated_at:new Date().toISOString()}));
     for (const group of chunks(newAttachments)) await db("physical_skus?on_conflict=sku", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(group) });
+    await recordInventoryEvents(newAttachments.map((row:any)=>({listing_id:row.listing_id,sku:row.sku,event_type:"sku_attached",source:"scheduled_listing_activation",quantity_delta:1})));
     const verifiedAttachments:any[]=[];
     for(const group of chunks(targetSkus,100)) verifiedAttachments.push(...await db(`physical_skus?select=sku,listing_id&sku=in.(${group.map(encodeURIComponent).join(",")})`));
     const verifiedBySku=new Map(verifiedAttachments.map((row:any)=>[String(row.sku),String(row.listing_id)]));

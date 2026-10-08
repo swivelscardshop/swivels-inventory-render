@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { reviseListingQuantity } from "@/lib/ebay";
 import { db } from "@/lib/supabase";
+import { recordInventoryEvents } from "@/lib/inventory-events";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -75,6 +76,7 @@ export async function POST(request: Request) {
           updated_at: new Date().toISOString(),
         }),
       });
+      await recordInventoryEvents(fresh.map((x:any)=>({listing_id:listing.id,sku:x.sku,event_type:"sku_attached",source:"csv_intake_existing",quantity_delta:1,details:{ebay_listing_id:listing.ebay_listing_id}})));
       quantitiesUpdated += 1;
       skusStored += fresh.length;
     }
@@ -144,6 +146,7 @@ export async function POST(request: Request) {
         throw new Error(
           `Supabase did not verify ${missing.length} pending SKU(s). Do not upload the generated eBay CSV yet.`,
         );
+      await recordInventoryEvents(uniquePending.map((x:any)=>({sku:x.sku,event_type:"sku_pending",source:"csv_intake_new",quantity_delta:1,details:{primary_sku:x.primarySku||x.sku,expected_quantity:Math.max(1,Number(x.expectedQuantity||1))}})));
     }
     return NextResponse.json({
       ok: true,

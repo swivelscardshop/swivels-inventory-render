@@ -15,6 +15,9 @@ drop table if exists marketplace_orders cascade;
 drop table if exists reconciliation_issues cascade;
 drop table if exists pending_skus cascade;
 drop table if exists sync_events cascade;
+drop table if exists inventory_events cascade;
+drop table if exists reconciliation_runs cascade;
+drop table if exists bin_audit_results cascade;
 drop table if exists physical_skus cascade;
 drop table if exists marketplace_listings cascade;
 
@@ -118,6 +121,39 @@ create table sync_events (
   processed_at timestamptz
 );
 
+create table inventory_events (
+  id uuid primary key default gen_random_uuid(),
+  listing_id uuid references marketplace_listings(id) on delete set null,
+  physical_sku_id uuid references physical_skus(id) on delete set null,
+  sku text,
+  event_type text not null,
+  source text not null,
+  quantity_delta integer,
+  details jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table reconciliation_runs (
+  id uuid primary key default gen_random_uuid(),
+  source text not null default 'manual',
+  status text not null default 'running',
+  listings_count integer,
+  sku_count integer,
+  issues_count integer,
+  summary jsonb not null default '{}'::jsonb,
+  error_message text,
+  started_at timestamptz not null default now(),
+  completed_at timestamptz
+);
+
+create table bin_audit_results (
+  physical_sku_id uuid primary key references physical_skus(id) on delete cascade,
+  status text not null default 'verified',
+  note text,
+  verified_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
 create table reconciliation_issues (
   id uuid primary key default gen_random_uuid(),
   listing_id uuid not null references marketplace_listings(id) on delete cascade,
@@ -138,6 +174,9 @@ create index marketplace_listings_match_key_idx on marketplace_listings(match_ke
 create index pending_skus_match_key_idx on pending_skus(match_key);
 create index pending_skus_primary_sku_idx on pending_skus(primary_sku);
 create index pending_skus_attach_status_idx on pending_skus(attach_status);
+create index inventory_events_created_idx on inventory_events(created_at desc);
+create index inventory_events_sku_idx on inventory_events(sku);
+create index reconciliation_runs_started_idx on reconciliation_runs(started_at desc);
 
 create view listing_reconciliation as
 select l.id, l.ebay_listing_id, l.title, l.ebay_quantity,
@@ -155,6 +194,9 @@ alter table sync_events enable row level security;
 alter table reconciliation_issues enable row level security;
 alter table pending_skus enable row level security;
 alter table app_secrets enable row level security;
+alter table inventory_events enable row level security;
+alter table reconciliation_runs enable row level security;
+alter table bin_audit_results enable row level security;
 
 create or replace function public.claim_sync_events(batch_limit integer default 10)
 returns setof public.sync_events

@@ -142,3 +142,19 @@ Supabase project are connected.
 - Fixed false missing-data warnings when Pokémon identity exists in the eBay title but its structured Supabase columns are blank.
 - Infers card name, number, set, finish, condition, and language from the current title before auditing it.
 - Keeps the current eBay title when no real title issue is detected instead of rebuilding it from incomplete fields.
+
+## 1.11.6-automation-safety.29
+
+- Preserves scheduled-listing SKU groups with their primary eBay SKU and expected quantity.
+- Links all duplicate locations when the scheduled listing becomes active and verifies the complete group before marking it attached.
+- Keeps attachment history instead of deleting the recovery evidence.
+
+## 1.11.6-business-operations.30
+
+- Adds an Operations Center with worker/webhook health, business metrics, CSV batch history, reconciliation reports, and the inventory ledger.
+- Adds a downloadable JSON backup of listings, locations, orders, pending SKUs, exceptions, sync events, ledger entries, and reconciliation runs.
+- Adds a confirmed oversell-protection action that reduces eBay quantities to stored sellable locations and ends empty listings.
+- Makes Bin Reconciliation checks persistent and adds missing-card and move-location actions.
+- Records scheduled SKU attachment and CSV intake activity in a durable inventory ledger.
+- Adds one daily reconciliation report from the always-running Render worker while retaining frequent background checks.
+- Run `supabase/v1.11.6-business-operations.sql` once before deploying this build.
