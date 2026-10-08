@@ -46,7 +46,8 @@ export async function POST(request: NextRequest) {
       first["*Quantity"] = String(group.reduce((sum, row) => sum + Math.max(1, Number(row["*Quantity"] || 1)), 0));
       newOutput.push(first);
       const primarySku=String(group[0].CustomLabel||"").trim();
-      for (const row of group) pending.push({ matchKey: key, primarySku, sku: row.CustomLabel, location: row.CustomLabel, title: row["*Title"] });
+      const expectedQuantity=group.reduce((sum, row) => sum + Math.max(1, Number(row["*Quantity"] || 1)), 0);
+      for (const row of group) pending.push({ matchKey: key, primarySku, expectedQuantity, sku: row.CustomLabel, location: row.CustomLabel, title: row["*Title"] });
     }
     const existingMatchGroups=Array.from(new Map(matches.map((row:any)=>[row.listingId,row])).keys()).map((listingId:any)=>{
       const copies=matches.filter((row:any)=>row.listingId===listingId),first=copies[0];

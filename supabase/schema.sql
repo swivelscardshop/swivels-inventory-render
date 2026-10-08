@@ -82,10 +82,16 @@ create table marketplace_orders (
 
 create table pending_skus (
   id uuid primary key default gen_random_uuid(),
+  batch_id uuid,
   match_key text not null,
   sku text not null unique,
   location_label text not null,
   primary_sku text,
+  expected_quantity integer not null default 1,
+  attach_status text not null default 'pending' check (attach_status in ('pending','attached','error')),
+  attached_listing_id uuid references marketplace_listings(id) on delete set null,
+  attached_at timestamptz,
+  error_message text,
   source text not null default 'csv_intake',
   created_at timestamptz not null default now()
 );
@@ -130,6 +136,8 @@ create index marketplace_orders_fulfillment_idx on marketplace_orders(fulfillmen
 create index reconciliation_issues_status_idx on reconciliation_issues(status);
 create index marketplace_listings_match_key_idx on marketplace_listings(match_key) where ebay_status = 'active';
 create index pending_skus_match_key_idx on pending_skus(match_key);
+create index pending_skus_primary_sku_idx on pending_skus(primary_sku);
+create index pending_skus_attach_status_idx on pending_skus(attach_status);
 
 create view listing_reconciliation as
 select l.id, l.ebay_listing_id, l.title, l.ebay_quantity,

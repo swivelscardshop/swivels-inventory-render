@@ -86,6 +86,8 @@ export async function POST(request: Request) {
       ).values(),
     ) as any[];
     if (uniquePending.length) {
+      const groupIds = new Map<string,string>();
+      for(const row of uniquePending){const primary=String(row.primarySku||row.sku);if(!groupIds.has(primary))groupIds.set(primary,crypto.randomUUID());}
       const pendingSkus = uniquePending.map((x: any) => String(x.sku));
       const assigned: any[] = [];
       for (let i = 0; i < pendingSkus.length; i += 100)
@@ -109,8 +111,14 @@ export async function POST(request: Request) {
         headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify(
           uniquePending.map((x: any) => ({
+            batch_id: groupIds.get(String(x.primarySku || x.sku)),
             match_key: x.matchKey,
             primary_sku: x.primarySku || x.sku,
+            expected_quantity: Math.max(1, Number(x.expectedQuantity || 1)),
+            attach_status: "pending",
+            attached_listing_id: null,
+            attached_at: null,
+            error_message: null,
             sku: x.sku,
             location_label: x.location || x.sku,
             source: "csv_intake",
@@ -121,7 +129,7 @@ export async function POST(request: Request) {
       for (let i = 0; i < pendingSkus.length; i += 100)
         verified.push(
           ...(await db(
-            `pending_skus?select=sku,match_key,primary_sku&sku=in.(${pendingSkus
+            `pending_skus?select=sku,match_key,primary_sku,expected_quantity,attach_status&sku=in.(${pendingSkus
               .slice(i, i + 100)
               .map(encodeURIComponent)
               .join(",")})`,
@@ -130,7 +138,7 @@ export async function POST(request: Request) {
       const verifiedBySku = new Map(verified.map((x) => [String(x.sku), x]));
       const missing = uniquePending.filter((x: any) => {
         const saved = verifiedBySku.get(String(x.sku));
-        return !saved || saved.match_key !== x.matchKey || saved.primary_sku !== (x.primarySku || x.sku);
+        return !saved || saved.match_key !== x.matchKey || saved.primary_sku !== (x.primarySku || x.sku) || Number(saved.expected_quantity) !== Math.max(1, Number(x.expectedQuantity || 1)) || saved.attach_status !== "pending";
       });
       if (missing.length)
         throw new Error(

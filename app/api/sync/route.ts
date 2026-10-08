@@ -131,13 +131,13 @@ export async function POST() {
     for (const row of stored) if (row.match_key) keyToIds.set(row.match_key, [...(keyToIds.get(row.match_key) || []), row.id]);
     const primaryToIds=new Map<string,string[]>();
     for(const row of stored)if(row.ebay_sku)primaryToIds.set(String(row.ebay_sku),[...(primaryToIds.get(String(row.ebay_sku))||[]),row.id]);
-    const pending = await dbAll("pending_skus?select=id,match_key,primary_sku,sku,location_label&order=id.asc");
-    const attachmentTargets = new Map<string, { pendingId: string; listingId: string; sku: string; locationLabel: string }>();
+    const pending = await dbAll("pending_skus?select=id,batch_id,match_key,primary_sku,expected_quantity,sku,location_label&attach_status=eq.pending&order=created_at.asc");
+    const attachmentTargets = new Map<string, { pendingId: string; listingId: string; primarySku: string; expectedQuantity: number; sku: string; locationLabel: string }>();
     for (const row of pending || []) {
       const direct=row.primary_sku?primaryToIds.get(String(row.primary_sku))||[]:[];
       const matches=direct.length===1?direct:(keyToIds.get(row.match_key)||[]);
       if (matches.length !== 1) continue;
-      attachmentTargets.set(String(row.sku), { pendingId: row.id, listingId: matches[0], sku: row.sku, locationLabel: row.location_label });
+      attachmentTargets.set(String(row.sku), { pendingId: row.id, listingId: matches[0], primarySku: String(row.primary_sku || row.sku), expectedQuantity: Math.max(1, Number(row.expected_quantity || 1)), sku: row.sku, locationLabel: row.location_label });
     }
     const targetSkus=[...attachmentTargets.keys()];
     const existingTargetSkus:any[]=[];
@@ -147,11 +147,19 @@ export async function POST() {
     for (const group of chunks(newAttachments)) await db("physical_skus?on_conflict=sku", { method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" }, body: JSON.stringify(group) });
     const verifiedAttachments:any[]=[];
     for(const group of chunks(targetSkus,100)) verifiedAttachments.push(...await db(`physical_skus?select=sku,listing_id&sku=in.(${group.map(encodeURIComponent).join(",")})`));
-    const attachedIds=verifiedAttachments.flatMap((row:any)=>{
-      const target=attachmentTargets.get(String(row.sku));
-      return target&&String(row.listing_id)===String(target.listingId)?[target.pendingId]:[];
-    });
-    for (const group of chunks([...new Set(attachedIds)], 100)) await db(`pending_skus?id=in.(${group.join(",")})`, { method: "DELETE" });
+    const verifiedBySku=new Map(verifiedAttachments.map((row:any)=>[String(row.sku),String(row.listing_id)]));
+    const pendingGroups=new Map<string,any[]>();
+    for(const row of pending||[]){const key=String(row.batch_id||row.primary_sku||row.match_key);pendingGroups.set(key,[...(pendingGroups.get(key)||[]),row]);}
+    for(const rows of pendingGroups.values()){
+      const firstTarget=attachmentTargets.get(String(rows[0].sku));
+      if(!firstTarget)continue;
+      const allAttached=rows.every((row:any)=>verifiedBySku.get(String(row.sku))===String(firstTarget.listingId));
+      if(!allAttached)continue;
+      const listingRows=await db(`physical_skus?select=id&listing_id=eq.${firstTarget.listingId}&status=in.(available,allocated)`);
+      if(Number(listingRows?.length||0)<firstTarget.expectedQuantity)continue;
+      const ids=rows.map((row:any)=>row.id);
+      for(const group of chunks(ids,100))await db(`pending_skus?id=in.(${group.join(",")})`,{method:"PATCH",body:JSON.stringify({attach_status:"attached",attached_listing_id:firstTarget.listingId,attached_at:new Date().toISOString(),error_message:null})});
+    }
 
     // Rebuild quantity discrepancies without altering either eBay quantity or locations.
     await db("reconciliation_issues?status=eq.open", { method: "PATCH", body: JSON.stringify({ status: "resolved", last_seen_at: new Date().toISOString() }) });
